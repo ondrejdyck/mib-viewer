@@ -1,0 +1,72 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments (platform-specific, let Windows users create fresh)
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# uv lock file (CRITICAL: platform-specific, causes Windows PyQt5 wheel issues)
+uv.lock
+
+# PyInstaller build artifacts
+*.manifest
+*.spec.backup
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+*.log
+
+# Test outputs
+test_outputs/
+
+# Example data files (large, not for repo)
+*.mib
+*.ndata1
+Example*4D/
+Example*EELS*/

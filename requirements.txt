@@ -1,0 +1,19 @@
+# MIB Viewer Requirements - Fallback for Windows
+# Use this if uv sync fails on Windows
+
+# Core GUI frameworks
+PyQt5>=5.15.11
+pyqtgraph>=0.13.7
+
+# Data processing
+numpy>=1.24.0
+matplotlib>=3.7.0
+h5py>=3.0.0
+
+# File format support
+emdfile>=0.0.16
+tqdm>=4.60.0
+py4dstem>=0.14.16
+
+# Development tools (optional)
+pyinstaller>=6.15.0
