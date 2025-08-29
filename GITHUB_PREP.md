@@ -58,9 +58,9 @@ rm -rf .venv build dist  # Clean up local artifacts
 ```
 
 ### **3. Update Repository URL**
-Edit `README.md` line 15:
+~~Edit `README.md` line 15:~~ ✅ **DONE**
 ```cmd
-git clone [your-repo-url]  # ← Replace with actual GitHub URL
+git clone https://github.com/ondrejdyck/mib-viewer.git  # ← Updated with actual URL
 ```
 
 ---
@@ -76,7 +76,7 @@ git clone [your-repo-url]  # ← Replace with actual GitHub URL
 
 ### **Their Experience:**
 ```cmd
-git clone https://github.com/your-username/mib-viewer.git
+git clone https://github.com/ondrejdyck/mib-viewer.git
 cd mib-viewer
 build_windows_exe.bat      # ← One command to build everything
 # Result: dist\MibViewer.exe ready for deployment
