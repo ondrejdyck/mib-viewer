@@ -72,9 +72,9 @@ jobs:
         echo "Strategy 1: Using PyInstaller spec file..."
         if (Test-Path "MibViewer.spec") {
           pyinstaller MibViewer.spec --distpath dist --workpath build
-          if (Test-Path "dist/MibViewer.exe") {
+          if (Test-Path "dist/MibViewer-Windows.exe") {
             echo "[SUCCESS] Strategy 1: Spec file build completed"
-            $exe_size = (Get-Item "dist/MibViewer.exe").Length / 1MB
+            $exe_size = (Get-Item "dist/MibViewer-Windows.exe").Length / 1MB
             echo "Executable size: $($exe_size.ToString('F1')) MB"
           } else {
             echo "[FAILED] Strategy 1: Spec file build failed"
@@ -83,7 +83,7 @@ jobs:
         
         if (-not (Test-Path "dist/MibViewer.exe")) {
           echo "Strategy 2: Direct PyInstaller command..."
-          pyinstaller --onefile --windowed --name=MibViewer `
+          pyinstaller --onefile --windowed --name=MibViewer-Windows `
             --add-data "src;src" `
             --hidden-import=mib_viewer.gui.mib_viewer_pyqtgraph `
             --hidden-import=mib_viewer.io.mib_loader `
@@ -93,9 +93,9 @@ jobs:
             --hidden-import=h5py `
             src/mib_viewer/__main__.py
           
-          if (Test-Path "dist/MibViewer.exe") {
+          if (Test-Path "dist/MibViewer-Windows.exe") {
             echo "[SUCCESS] Strategy 2: Direct build completed"
-            $exe_size = (Get-Item "dist/MibViewer.exe").Length / 1MB
+            $exe_size = (Get-Item "dist/MibViewer-Windows.exe").Length / 1MB
             echo "Executable size: $($exe_size.ToString('F1')) MB"
           } else {
             echo "[FAILED] Strategy 2: Direct build failed" 
@@ -106,8 +106,8 @@ jobs:
     - name: Verify executable
       run: |
         echo "=== Verifying Executable ==="
-        if (Test-Path "dist/MibViewer.exe") {
-          $exe = Get-Item "dist/MibViewer.exe"
+        if (Test-Path "dist/MibViewer-Windows.exe") {
+          $exe = Get-Item "dist/MibViewer-Windows.exe"
           echo "[SUCCESS] Executable created successfully"
           echo "File: $($exe.Name)"
           echo "Size: $([math]::Round($exe.Length/1MB, 2)) MB"
@@ -125,5 +125,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: MibViewer-Windows-exe
-        path: dist/MibViewer.exe
+        path: dist/MibViewer-Windows.exe
         retention-days: 30

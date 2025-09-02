@@ -2,6 +2,7 @@
 # PyInstaller spec file for MIB Viewer standalone executable
 
 import os
+import sys
 from pathlib import Path
 
 # Get the current directory
@@ -59,7 +60,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='MibViewer',
+    name='MibViewer-Windows' if sys.platform == 'win32' else 'MibViewer-Ubuntu22+',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

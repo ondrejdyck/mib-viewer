@@ -93,18 +93,18 @@ jobs:
         echo "Strategy 1: Using PyInstaller spec file..."
         if [ -f "MibViewer.spec" ]; then
           pyinstaller MibViewer.spec --distpath dist-linux --workpath build-linux
-          if [ -f "dist-linux/MibViewer" ]; then
+          if [ -f "dist-linux/MibViewer-Ubuntu22+" ]; then
             echo "[SUCCESS] Strategy 1: Spec file build completed"
-            exe_size=$(du -m "dist-linux/MibViewer" | cut -f1)
+            exe_size=$(du -m "dist-linux/MibViewer-Ubuntu22+" | cut -f1)
             echo "Executable size: ${exe_size} MB"
           else
             echo "[FAILED] Strategy 1: Spec file build failed"
           fi
         fi
         
-        if [ ! -f "dist-linux/MibViewer" ]; then
+        if [ ! -f "dist-linux/MibViewer-Ubuntu22+" ]; then
           echo "Strategy 2: Direct PyInstaller command..."
-          pyinstaller --onefile --windowed --name=MibViewer \
+          pyinstaller --onefile --windowed --name=MibViewer-Ubuntu22+ \
             --add-data "src:src" \
             --hidden-import=mib_viewer.gui.mib_viewer_pyqtgraph \
             --hidden-import=mib_viewer.io.mib_loader \
@@ -115,9 +115,9 @@ jobs:
             --distpath dist-linux \
             src/mib_viewer/__main__.py
           
-          if [ -f "dist-linux/MibViewer" ]; then
+          if [ -f "dist-linux/MibViewer-Ubuntu22+" ]; then
             echo "[SUCCESS] Strategy 2: Direct build completed"
-            exe_size=$(du -m "dist-linux/MibViewer" | cut -f1)
+            exe_size=$(du -m "dist-linux/MibViewer-Ubuntu22+" | cut -f1)
             echo "Executable size: ${exe_size} MB"
           else
             echo "[FAILED] Strategy 2: Direct build failed" 
@@ -128,14 +128,14 @@ jobs:
     - name: Verify executable and set permissions
       run: |
         echo "=== Verifying Linux Executable ==="
-        if [ -f "dist-linux/MibViewer" ]; then
+        if [ -f "dist-linux/MibViewer-Ubuntu22+" ]; then
           echo "[SUCCESS] Executable created successfully"
-          ls -la "dist-linux/MibViewer"
-          file "dist-linux/MibViewer"
+          ls -la "dist-linux/MibViewer-Ubuntu22+"
+          file "dist-linux/MibViewer-Ubuntu22+"
           echo "Making executable..."
-          chmod +x "dist-linux/MibViewer"
+          chmod +x "dist-linux/MibViewer-Ubuntu22+"
           echo "Final permissions:"
-          ls -la "dist-linux/MibViewer"
+          ls -la "dist-linux/MibViewer-Ubuntu22+"
           echo "Build environment info:"
           echo "Ubuntu version: ${{ github.event.inputs.ubuntu_version }}"
           ldd --version | head -1
@@ -151,5 +151,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: MibViewer-Linux-${{ github.event.inputs.ubuntu_version }}
-        path: dist-linux/MibViewer
+        path: dist-linux/MibViewer-Ubuntu22+
         retention-days: 30
