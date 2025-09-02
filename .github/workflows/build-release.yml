@@ -51,18 +51,18 @@ jobs:
     - name: Verify installation
       run: |
         echo "=== Verifying Installation ==="
-        python -c "import PyQt5; print('✅ PyQt5 imported successfully')"
-        python -c "import pyqtgraph; print('✅ PyQtGraph imported successfully')" 
-        python -c "import numpy; print('✅ NumPy imported successfully')"
-        python -c "import matplotlib; print('✅ Matplotlib imported successfully')"
-        python -c "import h5py; print('✅ h5py imported successfully')"
+        python -c "import PyQt5; print('[OK] PyQt5 imported successfully')"
+        python -c "import pyqtgraph; print('[OK] PyQtGraph imported successfully')" 
+        python -c "import numpy; print('[OK] NumPy imported successfully')"
+        python -c "import matplotlib; print('[OK] Matplotlib imported successfully')"
+        python -c "import h5py; print('[OK] h5py imported successfully')"
         echo "=== All imports successful ==="
         
     - name: Test import of main application
       run: |
         echo "=== Testing Application Imports ==="
-        python -c "from src.mib_viewer.gui.mib_viewer_pyqtgraph import MibViewerPyQtGraph; print('✅ Main app class imported')"
-        python -c "from src.mib_viewer.gui.mib_viewer_qt import load_mib; print('✅ MIB loading functions imported')"
+        python -c "from src.mib_viewer.gui.mib_viewer_pyqtgraph import MibViewerPyQtGraph; print('[OK] Main app class imported')"
+        python -c "from src.mib_viewer.gui.mib_viewer_qt import load_mib; print('[OK] MIB loading functions imported')"
         echo "=== Application imports successful ==="
     
     - name: Build executable with multiple strategies
@@ -72,11 +72,11 @@ jobs:
         if (Test-Path "MibViewer.spec") {
           pyinstaller MibViewer.spec --distpath dist --workpath build
           if (Test-Path "dist/MibViewer.exe") {
-            echo "✅ Strategy 1 SUCCESS: Spec file build completed"
+            echo "[SUCCESS] Strategy 1: Spec file build completed"
             $exe_size = (Get-Item "dist/MibViewer.exe").Length / 1MB
             echo "Executable size: $($exe_size.ToString('F1')) MB"
           } else {
-            echo "❌ Strategy 1 FAILED: Spec file build failed"
+            echo "[FAILED] Strategy 1: Spec file build failed"
           }
         }
         
@@ -94,11 +94,11 @@ jobs:
             standalone_main.py
           
           if (Test-Path "dist/MibViewer.exe") {
-            echo "✅ Strategy 2 SUCCESS: Direct build completed"
+            echo "[SUCCESS] Strategy 2: Direct build completed"
             $exe_size = (Get-Item "dist/MibViewer.exe").Length / 1MB
             echo "Executable size: $($exe_size.ToString('F1')) MB"
           } else {
-            echo "❌ Strategy 2 FAILED: Direct build failed" 
+            echo "[FAILED] Strategy 2: Direct build failed" 
             exit 1
           }
         }
@@ -108,13 +108,13 @@ jobs:
         echo "=== Verifying Executable ==="
         if (Test-Path "dist/MibViewer.exe") {
           $exe = Get-Item "dist/MibViewer.exe"
-          echo "✅ Executable created successfully"
+          echo "[SUCCESS] Executable created successfully"
           echo "File: $($exe.Name)"
           echo "Size: $([math]::Round($exe.Length/1MB, 2)) MB"
           echo "Created: $($exe.CreationTime)"
           echo "Full path: $($exe.FullName)"
         } else {
-          echo "❌ ERROR: MibViewer.exe not found!"
+          echo "[ERROR] MibViewer.exe not found!"
           echo "Contents of dist directory:"
           Get-ChildItem dist -Recurse
           exit 1
