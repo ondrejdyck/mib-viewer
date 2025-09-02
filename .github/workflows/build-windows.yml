@@ -1,0 +1,129 @@
+name: Build Windows Executable
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      upload_artifact:
+        description: 'Upload build artifact'
+        required: false
+        default: 'true'
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Display Python and system info
+      run: |
+        echo "=== System Information ==="
+        python --version
+        pip --version
+        echo "Platform: ${{ runner.os }}"
+        echo "Architecture: ${{ runner.arch }}"
+        echo "Working directory: $(pwd)"
+        echo "Available disk space:"
+        Get-WmiObject -Class Win32_LogicalDisk | Select-Object DeviceID, @{Name="Size(GB)";Expression={[math]::Round($_.Size/1GB,2)}}, @{Name="FreeSpace(GB)";Expression={[math]::Round($_.FreeSpace/1GB,2)}}
+    
+    - name: Install dependencies with verbose logging
+      run: |
+        echo "=== Installing Python Dependencies ==="
+        echo "Using pip to install dependencies..."
+        pip install --upgrade pip
+        echo "Installing build dependencies..."
+        pip install pyinstaller
+        echo "Installing application dependencies..."
+        pip install PyQt5 pyqtgraph numpy matplotlib h5py emdfile tqdm py4dstem
+        echo "=== Dependency Installation Complete ==="
+        pip list
+    
+    - name: Verify installation
+      run: |
+        echo "=== Verifying Installation ==="
+        python -c "import PyQt5; print('[OK] PyQt5 imported successfully')"
+        python -c "import pyqtgraph; print('[OK] PyQtGraph imported successfully')" 
+        python -c "import numpy; print('[OK] NumPy imported successfully')"
+        python -c "import matplotlib; print('[OK] Matplotlib imported successfully')"
+        python -c "import h5py; print('[OK] h5py imported successfully')"
+        echo "=== All imports successful ==="
+        
+    - name: Test import of main application
+      run: |
+        echo "=== Testing Application Imports ==="
+        python -c "from src.mib_viewer.gui.mib_viewer_pyqtgraph import MibViewerPyQtGraph; print('[OK] Main app class imported')"
+        python -c "from src.mib_viewer.io.mib_loader import load_mib; print('[OK] MIB loading functions imported')"
+        echo "=== Application imports successful ==="
+    
+    - name: Build executable with multiple strategies
+      run: |
+        echo "=== Building Windows Executable ==="
+        echo "Strategy 1: Using PyInstaller spec file..."
+        if (Test-Path "MibViewer.spec") {
+          pyinstaller MibViewer.spec --distpath dist --workpath build
+          if (Test-Path "dist/MibViewer.exe") {
+            echo "[SUCCESS] Strategy 1: Spec file build completed"
+            $exe_size = (Get-Item "dist/MibViewer.exe").Length / 1MB
+            echo "Executable size: $($exe_size.ToString('F1')) MB"
+          } else {
+            echo "[FAILED] Strategy 1: Spec file build failed"
+          }
+        }
+        
+        if (-not (Test-Path "dist/MibViewer.exe")) {
+          echo "Strategy 2: Direct PyInstaller command..."
+          pyinstaller --onefile --windowed --name=MibViewer `
+            --add-data "src;src" `
+            --hidden-import=mib_viewer.gui.mib_viewer_pyqtgraph `
+            --hidden-import=mib_viewer.io.mib_loader `
+            --hidden-import=PyQt5 `
+            --hidden-import=pyqtgraph `
+            --hidden-import=numpy `
+            --hidden-import=h5py `
+            src/mib_viewer/__main__.py
+          
+          if (Test-Path "dist/MibViewer.exe") {
+            echo "[SUCCESS] Strategy 2: Direct build completed"
+            $exe_size = (Get-Item "dist/MibViewer.exe").Length / 1MB
+            echo "Executable size: $($exe_size.ToString('F1')) MB"
+          } else {
+            echo "[FAILED] Strategy 2: Direct build failed" 
+            exit 1
+          }
+        }
+    
+    - name: Verify executable
+      run: |
+        echo "=== Verifying Executable ==="
+        if (Test-Path "dist/MibViewer.exe") {
+          $exe = Get-Item "dist/MibViewer.exe"
+          echo "[SUCCESS] Executable created successfully"
+          echo "File: $($exe.Name)"
+          echo "Size: $([math]::Round($exe.Length/1MB, 2)) MB"
+          echo "Created: $($exe.CreationTime)"
+          echo "Full path: $($exe.FullName)"
+        } else {
+          echo "[ERROR] MibViewer.exe not found!"
+          echo "Contents of dist directory:"
+          Get-ChildItem dist -Recurse
+          exit 1
+        }
+    
+    - name: Upload executable as artifact
+      if: github.event.inputs.upload_artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: MibViewer-Windows-exe
+        path: dist/MibViewer.exe
+        retention-days: 30
