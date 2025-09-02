@@ -25,13 +25,13 @@ from tqdm import tqdm
 # Import our MIB loading functions
 try:
     # Try relative import (when run as module)
-    from ..gui.mib_viewer_qt import load_mib, get_mib_properties, auto_detect_scan_size
+    from .mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties
 except ImportError:
     # Fall back for direct execution
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from gui.mib_viewer_qt import load_mib, get_mib_properties, auto_detect_scan_size
+    from io.mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties
 
 class MibToEmdConverter:
     """

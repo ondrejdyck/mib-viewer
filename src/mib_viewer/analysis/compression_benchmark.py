@@ -17,7 +17,10 @@ import gzip
 import pickle
 
 # Import our MIB loading functions
-from mib_viewer_qt import load_mib, get_mib_properties
+try:
+    from ..io.mib_loader import load_mib, get_mib_properties, MibProperties
+except ImportError:
+    from mib_viewer.io.mib_loader import load_mib, get_mib_properties, MibProperties
 
 def analyze_data_sparsity(data_4d):
     """Analyze sparsity and distribution of 4D data"""

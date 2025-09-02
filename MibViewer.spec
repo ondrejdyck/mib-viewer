@@ -18,7 +18,7 @@ if SRC_DIR.exists():
         src_files.append((str(py_file), str(rel_path.parent)))
 
 a = Analysis(
-    ['standalone_main.py'],
+    ['src/mib_viewer/__main__.py'],
     pathex=[str(CURRENT_DIR), str(SRC_DIR)],
     binaries=[],
     datas=src_files,  # Include all source files
@@ -26,8 +26,8 @@ a = Analysis(
         'mib_viewer',
         'mib_viewer.gui', 
         'mib_viewer.gui.mib_viewer_pyqtgraph',
-        'mib_viewer.gui.mib_viewer_qt',
         'mib_viewer.io',
+        'mib_viewer.io.mib_loader',
         'mib_viewer.io.mib_to_emd_converter',
         'PyQt5',
         'PyQt5.QtWidgets',
@@ -36,8 +36,6 @@ a = Analysis(
         'pyqtgraph',
         'pyqtgraph.opengl',
         'numpy',
-        'matplotlib',
-        'matplotlib.backends.backend_qt5agg',
         'h5py',
         'emdfile',
         'tqdm',

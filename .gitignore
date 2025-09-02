@@ -70,3 +70,6 @@ test_outputs/
 *.ndata1
 Example*4D/
 Example*EELS*/
+
+# Conversation and development files
+CONVERSATION_SUMMARY.md
