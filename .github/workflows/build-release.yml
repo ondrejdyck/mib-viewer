@@ -121,7 +121,7 @@ jobs:
         }
     
     - name: Upload executable as artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MibViewer-Windows-exe
         path: dist/MibViewer.exe
