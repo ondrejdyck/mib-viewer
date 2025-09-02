@@ -228,8 +228,9 @@ jobs:
       run: |
         echo "=== Installing System Dependencies ==="
         sudo apt-get update
-        sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtwidgets python3-pyqt5.qtgui python3-pyqt5.qtcore
-        echo "System PyQt5 installation completed"
+        echo "Installing GUI and X11 dependencies for PyQt5..."
+        sudo apt-get install -y libxcb-xinerama0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-keysyms1 libxcb-icccm4 libxcb-image0 libxcb-render-util0 libfontconfig1 libx11-xcb1
+        echo "System dependencies installation completed"
     
     - name: Install Python dependencies
       run: |
@@ -237,6 +238,8 @@ jobs:
         pip install --upgrade pip
         echo "Installing build dependencies..."
         pip install pyinstaller
+        echo "Installing GUI framework..."
+        pip install PyQt5
         echo "Installing application dependencies..."
         pip install pyqtgraph numpy matplotlib h5py emdfile tqdm py4dstem
         echo "=== Dependency Installation Complete ==="
