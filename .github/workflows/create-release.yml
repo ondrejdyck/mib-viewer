@@ -48,7 +48,7 @@ jobs:
         retention-days: 30
 
   build-linux:
-    runs-on: ubuntu-20.04  # For GLIBC compatibility
+    runs-on: ubuntu-22.04  # Ubuntu 20.04 runners unavailable
     
     steps:
     - name: Checkout code
@@ -127,7 +127,7 @@ jobs:
           
           ### **Linux (Ubuntu/Debian)**
           - **Download**: `MibViewer-Ubuntu22+` (attached below)
-          - **Requirements**: Ubuntu 20.04+ or equivalent (built on Ubuntu 20.04)
+          - **Requirements**: Ubuntu 22.04+ or equivalent (built on Ubuntu 22.04)
           - **Usage**: `chmod +x MibViewer-Ubuntu22+ && ./MibViewer-Ubuntu22+`
           
           ## ✨ Features
@@ -138,7 +138,7 @@ jobs:
           
           ## 📋 System Requirements
           - **Windows**: 10/11 (64-bit), 4GB+ RAM (8GB+ recommended)
-          - **Linux**: Ubuntu 20.04+ or equivalent, 4GB+ RAM (8GB+ recommended)
+          - **Linux**: Ubuntu 22.04+ or equivalent, 4GB+ RAM (8GB+ recommended)
           - **No additional software required** for either platform
           
           ## 🔧 Usage
@@ -153,7 +153,7 @@ jobs:
           - **Python**: 3.11
           - **GUI Framework**: PyQt5 + PyQtGraph
           - **Packaging**: PyInstaller
-          - **GLIBC Compatibility**: Built on Ubuntu 20.04 for maximum compatibility
+          - **GLIBC Compatibility**: Built on Ubuntu 22.04
           
           **Repository**: https://github.com/ondrejdyck/mib-viewer
         draft: false
