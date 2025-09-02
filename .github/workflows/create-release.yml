@@ -4,33 +4,32 @@ on:
   push:
     tags:
       - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
 
 permissions:
   contents: write  # Required for creating releases
   actions: read
 
 jobs:
-  create-release:
+  create-placeholder-release:
     runs-on: ubuntu-latest
     
     steps:
     - name: Create placeholder release
       uses: softprops/action-gh-release@v1
       with:
-        name: MIB Viewer ${{ github.ref_name }}
+        name: MIB Viewer ${{ github.ref_name || 'Manual Release' }}
         body: |
-          # MIB Viewer ${{ github.ref_name }}
+          # MIB Viewer Release
           
           ## 🚀 Multi-Platform Release
           
-          **Note**: This release was created automatically from a version tag.
+          **Note**: This release was created automatically. 
           
           To add executables to this release:
           1. Run the "Build Windows Executable" workflow
           2. Run the "Build Linux Executable" workflow  
           3. Download the artifacts and manually attach them to this release
-          
-          Or use the individual build workflows during development and create releases manually.
           
           ## ✨ Features
           - **EELS Analysis**: Hardware-accelerated PyQtGraph interface
@@ -38,15 +37,9 @@ jobs:
           - **Standalone**: No Python installation required
           - **Performance**: Real-time interaction with optimized updates
           
-          ## 🏗️ Build Information
-          - **Built with**: GitHub Actions automated CI/CD
-          - **Python**: 3.11
-          - **GUI Framework**: PyQt5 + PyQtGraph
-          - **Packaging**: PyInstaller
-          
           **Repository**: https://github.com/ondrejdyck/mib-viewer
-          **Documentation**: See README.md for detailed usage instructions
         draft: true  # Create as draft until artifacts are added
         prerelease: false
+        tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
