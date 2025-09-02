@@ -149,3 +149,155 @@ def load_mib(path_buffer, scan_size=None):
     )
     
     return data['data']
+
+
+def load_emd(path_buffer):
+    """Load EMD 1.0 format file created by our MIB to EMD converter.
+    
+    Parameters:
+    -----------
+    path_buffer : str
+        Path to the EMD file
+        
+    Returns:
+    --------
+    numpy.ndarray
+        4D array with shape (sy, sx, qy, qx) - same format as load_mib()
+    """
+    try:
+        import h5py
+    except ImportError:
+        raise ImportError("h5py is required to load EMD files. Install with: pip install h5py")
+    
+    try:
+        with h5py.File(path_buffer, 'r') as f:
+            # Navigate to the data in EMD 1.0 structure
+            # Structure: /version_1/data/datacubes/datacube_000/data
+            if 'version_1' not in f:
+                raise ValueError("Not a valid EMD 1.0 file - missing version_1 group")
+            
+            version_group = f['version_1']
+            if 'data' not in version_group or 'datacubes' not in version_group['data']:
+                raise ValueError("Not a valid EMD 1.0 file - missing data/datacubes structure")
+            
+            datacubes = version_group['data']['datacubes']
+            if 'datacube_000' not in datacubes:
+                raise ValueError("Not a valid EMD 1.0 file - missing datacube_000")
+            
+            datacube = datacubes['datacube_000']
+            if 'data' not in datacube:
+                raise ValueError("Not a valid EMD 1.0 file - missing data dataset")
+            
+            # Load the 4D data - it's memory-mapped so this is efficient
+            data = datacube['data'][:]
+            
+            # Verify expected 4D shape
+            if len(data.shape) != 4:
+                raise ValueError(f"Expected 4D data, got {len(data.shape)}D with shape {data.shape}")
+            
+            return data
+            
+    except OSError as e:
+        if "Unable to open file" in str(e):
+            raise ValueError(f"Cannot open EMD file: {path_buffer}")
+        else:
+            raise ValueError(f"Error reading EMD file: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Failed to load EMD file: {str(e)}")
+
+
+def load_data_file(path_buffer, scan_size=None):
+    """Universal loader that detects file type and loads appropriately.
+    
+    Parameters:
+    -----------
+    path_buffer : str
+        Path to the data file (.mib or .emd)
+    scan_size : tuple, optional
+        Scan size for MIB files (ignored for EMD files)
+        
+    Returns:
+    --------
+    numpy.ndarray
+        4D array with shape (sy, sx, qy, qx)
+    """
+    path_str = str(path_buffer).lower()
+    
+    if path_str.endswith('.emd'):
+        return load_emd(path_buffer)
+    elif path_str.endswith('.mib'):
+        return load_mib(path_buffer, scan_size)
+    else:
+        # Try to auto-detect based on file content
+        try:
+            # Try EMD first (safer - won't corrupt memory if wrong)
+            return load_emd(path_buffer)
+        except:
+            try:
+                # Fall back to MIB
+                return load_mib(path_buffer, scan_size)
+            except:
+                raise ValueError(f"Cannot determine file type or load data from: {path_buffer}")
+
+
+def get_data_file_info(path_buffer):
+    """Get basic information about a data file without loading the full dataset.
+    
+    Parameters:
+    -----------
+    path_buffer : str
+        Path to the data file (.mib or .emd)
+        
+    Returns:
+    --------
+    dict
+        Dictionary with file information including shape, size, and type
+    """
+    path_str = str(path_buffer).lower()
+    
+    if path_str.endswith('.emd'):
+        try:
+            import h5py
+            with h5py.File(path_buffer, 'r') as f:
+                datacube = f['version_1/data/datacubes/datacube_000']
+                data_shape = datacube['data'].shape
+                file_size = os.path.getsize(path_buffer)
+                
+                return {
+                    'file_type': 'EMD 1.0',
+                    'shape': data_shape,
+                    'size_bytes': file_size,
+                    'size_gb': file_size / (1024**3),
+                    'compressed': True,  # EMD files are typically compressed
+                    'compatible': True
+                }
+        except Exception as e:
+            return {'file_type': 'EMD', 'error': str(e), 'compatible': False}
+            
+    elif path_str.endswith('.mib'):
+        try:
+            # Read just the header for MIB files
+            with open(path_buffer, 'rb') as f:
+                head = f.read(384).decode().split(',')
+                f.seek(0, os.SEEK_END)
+                filesize = f.tell()
+            
+            mib_prop = get_mib_properties(head)
+            num_frames = filesize // (mib_prop.headsize + np.prod(mib_prop.merlin_size) * 2)
+            scan_size = auto_detect_scan_size(num_frames)
+            
+            return {
+                'file_type': 'MIB',
+                'shape': (scan_size[1], scan_size[0], mib_prop.merlin_size[1], mib_prop.merlin_size[0]),
+                'size_bytes': filesize,
+                'size_gb': filesize / (1024**3),
+                'compressed': False,
+                'scan_size': scan_size,
+                'detector_size': mib_prop.merlin_size,
+                'compatible': True
+            }
+        except Exception as e:
+            return {'file_type': 'MIB', 'error': str(e), 'compatible': False}
+    
+    else:
+        return {'file_type': 'Unknown', 'error': 'Unsupported file extension', 'compatible': False}

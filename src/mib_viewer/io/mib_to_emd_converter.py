@@ -302,11 +302,11 @@ def main():
     """Command line interface for MIB to EMD conversion"""
     parser = argparse.ArgumentParser(
         description='Convert MIB files to EMD 1.0 format with optimal compression',
-        epilog='Example: python mib_to_emd_converter.py data.mib data.h5'
+        epilog='Example: python mib_to_emd_converter.py data.mib data.emd'
     )
     
     parser.add_argument('input_mib', help='Input MIB file path')
-    parser.add_argument('output_emd', help='Output EMD/HDF5 file path')
+    parser.add_argument('output_emd', help='Output EMD file path (.emd extension recommended)')
     parser.add_argument('--compression', choices=['gzip', 'szip', 'lzf', 'none'], 
                        default='gzip', help='Compression algorithm (default: gzip)')
     parser.add_argument('--compression-level', type=int, choices=range(1, 10),
@@ -347,19 +347,19 @@ def main():
         stats = converter.convert_to_emd(args.input_mib, args.output_emd)
         
         # Success message
-        print(f"\n✅ Successfully converted {os.path.basename(args.input_mib)} to EMD format!")
+        print(f"\n[SUCCESS] Successfully converted {os.path.basename(args.input_mib)} to EMD format!")
         print(f"   Saved: {args.output_emd}")
         print(f"   Size reduction: {stats['compression_ratio']:.1f}x")
         
     except KeyboardInterrupt:
-        print("\n❌ Conversion cancelled by user")
+        print("\n[CANCELLED] Conversion cancelled by user")
         # Clean up partial file
         if os.path.exists(args.output_emd):
             os.remove(args.output_emd)
         sys.exit(1)
         
     except Exception as e:
-        print(f"\n❌ Conversion failed: {str(e)}")
+        print(f"\n[ERROR] Conversion failed: {str(e)}")
         # Clean up partial file
         if os.path.exists(args.output_emd):
             os.remove(args.output_emd)

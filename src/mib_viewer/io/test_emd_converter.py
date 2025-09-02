@@ -31,14 +31,14 @@ def test_converter():
     output_dir = Path("test_outputs")
     output_dir.mkdir(exist_ok=True)
     
-    print("🧪 Testing MIB to EMD Converter")
+    print("[TEST] Testing MIB to EMD Converter")
     print("=" * 50)
     
     for test_file in test_files:
         mib_path = test_data_dir / test_file
         
         if not mib_path.exists():
-            print(f"⚠️  Test file not found: {mib_path}")
+            print(f"[WARNING] Test file not found: {mib_path}")
             continue
         
         # Test different compression settings
@@ -49,11 +49,11 @@ def test_converter():
             ("no_compression", {"compression": None}),
         ]
         
-        print(f"\n📁 Testing: {test_file}")
+        print(f"\n[FILE] Testing: {test_file}")
         print("-" * 30)
         
         for config_name, config in test_configs:
-            output_name = f"{mib_path.stem}_{config_name}.h5"
+            output_name = f"{mib_path.stem}_{config_name}.emd"
             output_path = output_dir / output_name
             
             print(f"\n  Testing {config_name}...")
@@ -68,20 +68,20 @@ def test_converter():
                 total_time = time.time() - start_time
                 
                 # Report results
-                print(f"    ✅ Success!")
-                print(f"    📊 {stats['compression_ratio']:.1f}x compression")
-                print(f"    ⏱️  {total_time:.1f}s total time")
-                print(f"    💾 {stats['output_size_gb']:.2f} GB output")
+                print(f"    [SUCCESS] Conversion completed!")
+                print(f"    [STATS] {stats['compression_ratio']:.1f}x compression")
+                print(f"    [TIME] {total_time:.1f}s total time")
+                print(f"    [SIZE] {stats['output_size_gb']:.2f} GB output")
                 
                 # Test EMD file compatibility
                 test_emd_compatibility(output_path)
                 
             except Exception as e:
-                print(f"    ❌ Failed: {str(e)}")
+                print(f"    [FAILED] {str(e)}")
                 continue
     
-    print(f"\n🎯 Test outputs saved to: {output_dir}")
-    print("\n📋 Test Summary:")
+    print(f"\n[OUTPUT] Test outputs saved to: {output_dir}")
+    print("\n[SUMMARY] Test Summary:")
     print("   - EMD files are compatible with py4DSTEM")
     print("   - Optimal compression confirmed") 
     print("   - Ready for production use!")
@@ -110,27 +110,27 @@ def test_emd_compatibility(emd_path):
             assert 'data' in datacube
             
             data_shape = datacube['data'].shape
-            print(f"      📐 4D shape: {data_shape}")
+            print(f"      [SHAPE] 4D shape: {data_shape}")
             
         # Test emdfile compatibility
         try:
             emd = emdfile.read(emd_path)
-            print(f"      📦 emdfile compatible: ✅")
+            print(f"      [COMPAT] emdfile compatible: YES")
         except Exception as e:
-            print(f"      📦 emdfile warning: {str(e)}")
+            print(f"      [COMPAT] emdfile warning: {str(e)}")
             
         # Test py4DSTEM compatibility (if available)
         try:
             import py4DSTEM
             dataset = py4DSTEM.io.read(emd_path)
-            print(f"      🔬 py4DSTEM compatible: ✅")
+            print(f"      [COMPAT] py4DSTEM compatible: YES")
         except ImportError:
-            print(f"      🔬 py4DSTEM not installed (optional)")
+            print(f"      [COMPAT] py4DSTEM not installed (optional)")
         except Exception as e:
-            print(f"      🔬 py4DSTEM warning: {str(e)}")
+            print(f"      [COMPAT] py4DSTEM warning: {str(e)}")
             
     except Exception as e:
-        print(f"      ❌ Compatibility test failed: {str(e)}")
+        print(f"      [ERROR] Compatibility test failed: {str(e)}")
 
 if __name__ == "__main__":
     test_converter()
