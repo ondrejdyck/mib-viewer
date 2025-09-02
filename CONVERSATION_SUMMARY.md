@@ -196,4 +196,43 @@ This approach will enable smooth interaction with multi-gigabyte 4D STEM dataset
 
 ---
 
-*This project has evolved from a simple EELS viewer into a comprehensive, high-performance 4D STEM analysis toolkit with industry-standard data formats, optimal compression strategies, and hardware-accelerated real-time visualization capabilities.*
+## 🚀 Latest Development - GitHub Repository & Cross-Platform Distribution
+
+### GitHub Repository Successfully Deployed
+- **Repository**: https://github.com/ondrejdyck/mib-viewer
+- **Fixed Windows PyQt5 wheel issues** by excluding problematic `uv.lock` from repository
+- **Clean Windows dependency resolution** - users get fresh platform-appropriate packages
+- **Comprehensive documentation** with correct repository URLs and workflows
+- **SSH key authentication** configured for development machine
+
+### Alpha Testing Success
+- **Windows executable built and tested** on acquisition computer
+- **Performance excellent** - hardware-accelerated PyQtGraph delivering smooth real-time interaction
+- **4D STEM virtual detectors working perfectly** - BF/DF imaging with optimized 300ms update delays
+- **Standalone deployment confirmed** - single .exe file runs without Python installation
+
+### Identified Challenge: Cross-Platform Build Distribution
+- **Manual Windows builds work** but require access to Windows development environment
+- **Build process not smooth** due to platform-specific dependency resolution issues
+- **Distribution bottleneck** - need better way to provide executables to end users
+
+### Next Development Phase: GitHub Actions CI/CD
+**Planned Implementation**:
+- **Automated Windows builds** using GitHub Actions runners
+- **Debug-friendly workflow** with extensive logging for collaborative troubleshooting
+- **Automatic release uploads** - downloadable .exe files for every version
+- **Eliminates manual build requirement** - users get pre-built executables
+- **Superior debugging environment** - clean, reproducible build logs accessible from Linux
+
+**Benefits**: 
+- ✅ No Windows development machine required
+- ✅ Consistent, clean build environment every time  
+- ✅ Collaborative debugging from command line
+- ✅ Automatic distribution to end users
+- ✅ Version-controlled build process
+
+**Current Status**: Repository ready, alpha testing successful, GitHub Actions implementation queued for next development session.
+
+---
+
+*This project has evolved from a simple EELS viewer into a comprehensive, high-performance 4D STEM analysis toolkit with industry-standard data formats, optimal compression strategies, hardware-accelerated real-time visualization capabilities, and is now positioned for automated cross-platform distribution via GitHub Actions CI/CD.*
