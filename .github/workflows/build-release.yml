@@ -12,6 +12,10 @@ on:
         default: 'true'
         type: boolean
 
+permissions:
+  contents: write  # Required for creating releases
+  actions: read
+
 jobs:
   build-windows:
     runs-on: windows-latest
