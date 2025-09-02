@@ -3,23 +3,26 @@
 **Hardware-accelerated PyQtGraph GUI for analyzing MIB EELS and 4D STEM datasets with virtual detector capabilities.**
 
 ![Status](https://img.shields.io/badge/Status-Release-green)
-![Platform](https://img.shields.io/badge/Platform-Windows-blue)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-blue)
 ![Build](https://img.shields.io/badge/Build-Automated-brightgreen)
 
 ## 🚀 Quick Start - Download & Run
 
 ### **Recommended: Get the Latest Release**
 
-1. **Download**: Go to [**Releases**](https://github.com/ondrejdyck/mib-viewer/releases) and download `MibViewer.exe`
-2. **Run**: Double-click the .exe file - no installation needed!
-3. **Load Data**: File → Load MIB File → select your dataset
-4. **Analyze**: Switch between EELS and 4D STEM tabs
+1. **Download**: Go to [**Releases**](https://github.com/ondrejdyck/mib-viewer/releases) and download for your platform:
+   - **Windows**: `MibViewer.exe` - Double-click to run
+   - **Linux**: `MibViewer` - Run with `chmod +x MibViewer && ./MibViewer`
+2. **Load Data**: File → Load MIB File → select your dataset
+3. **Analyze**: Switch between EELS and 4D STEM tabs
 
 ### **Alternative: Development Builds**
 
 1. **Go to**: [Actions](https://github.com/ondrejdyck/mib-viewer/actions) 
-2. **Download**: "MibViewer-Windows-exe" artifact from latest successful run
-3. **Extract**: and run MibViewer.exe
+2. **Download**: Build artifacts from latest successful run:
+   - "MibViewer-Windows-exe" for Windows
+   - "MibViewer-Linux" for Ubuntu/Debian
+3. **Extract**: and run the appropriate executable
 
 ---
 
@@ -47,10 +50,17 @@
 
 ## 🖥️ System Requirements
 
+### **Windows**
 - **Windows 10/11** (64-bit)
 - **4GB+ RAM** (8GB+ recommended for large datasets)  
 - **100MB free disk space**
 - **No admin rights required**
+
+### **Linux (Ubuntu/Debian)**
+- **Ubuntu 18.04+** or **Debian 10+** (64-bit)
+- **4GB+ RAM** (8GB+ recommended for large datasets)
+- **100MB free disk space**
+- **No root access required**
 
 ---
 
@@ -68,10 +78,11 @@
 ```
 src/mib_viewer/          # Main application code
 ├── gui/                 # PyQtGraph interface
-├── io/                  # File format handlers  
-└── analysis/            # Data processing tools
+├── io/                  # File format handlers (including mib_loader.py)  
+├── analysis/            # Data processing tools
+├── __main__.py          # Standard Python module entry point
+└── main.py              # Main function for PyInstaller
 
-standalone_main.py       # PyInstaller entry point
 MibViewer.spec          # Build configuration
 .github/workflows/      # Automated CI/CD
 ```

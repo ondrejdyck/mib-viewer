@@ -130,19 +130,45 @@ jobs:
         path: dist/MibViewer.exe
         retention-days: 30
     
-    - name: Create GitHub Release (if tagged)
-      if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+  create-release:
+    needs: [build-windows, build-ubuntu]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+    
+    steps:
+    - name: Download Windows artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: MibViewer-Windows-exe
+        path: ./windows
+        
+    - name: Download Linux artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: MibViewer-Linux
+        path: ./linux
+        
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          dist/MibViewer.exe
+          ./windows/MibViewer.exe
+          ./linux/MibViewer
         name: MIB Viewer ${{ github.ref_name }}
         body: |
           # MIB Viewer ${{ github.ref_name }}
           
-          ## 🚀 Windows Executable
+          ## 🚀 Multi-Platform Release
           
-          **Download**: `MibViewer.exe` (attached below)
+          ### **Windows**
+          - **Download**: `MibViewer.exe` (attached below)
+          - **Requirements**: Windows 10/11 (64-bit)
+          - **Usage**: Double-click to run
+          
+          ### **Linux (Ubuntu/Debian)**
+          - **Download**: `MibViewer` (attached below)
+          - **Requirements**: Ubuntu 18.04+ or Debian 10+
+          - **Usage**: `chmod +x MibViewer && ./MibViewer`
           
           ## ✨ Features
           - **EELS Analysis**: Hardware-accelerated PyQtGraph interface
@@ -151,15 +177,22 @@ jobs:
           - **Performance**: Real-time interaction with optimized updates
           
           ## 📋 System Requirements
-          - Windows 10/11 (64-bit)
-          - 4GB+ RAM (8GB+ recommended for large datasets)
-          - No additional software required
+          - **Windows**: 10/11 (64-bit), 4GB+ RAM (8GB+ recommended)
+          - **Linux**: Ubuntu 18.04+ or equivalent, 4GB+ RAM (8GB+ recommended)
+          - **No additional software required** for either platform
           
           ## 🔧 Usage
-          1. Download `MibViewer.exe`
-          2. Double-click to run
-          3. Load MIB files via File menu
-          4. Switch between EELS and 4D STEM tabs
+          1. **Download** the appropriate executable for your platform
+          2. **Windows**: Double-click `MibViewer.exe`
+          3. **Linux**: `chmod +x MibViewer && ./MibViewer`
+          4. **Load Data**: File → Load MIB File → select your dataset
+          5. **Analyze**: Switch between EELS and 4D STEM tabs
+          
+          ## 🏗️ Build Information
+          - **Built with**: GitHub Actions automated CI/CD
+          - **Python**: 3.11
+          - **GUI Framework**: PyQt5 + PyQtGraph
+          - **Packaging**: PyInstaller
           
           **Repository**: https://github.com/ondrejdyck/mib-viewer
           **Documentation**: See README.md for detailed usage instructions
@@ -167,3 +200,124 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-ubuntu:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Display Python and system info
+      run: |
+        echo "=== System Information ==="
+        python --version
+        pip --version
+        echo "Platform: ${{ runner.os }}"
+        echo "Architecture: ${{ runner.arch }}"
+        echo "Working directory: $(pwd)"
+        echo "Available disk space:"
+        df -h
+    
+    - name: Install system dependencies
+      run: |
+        echo "=== Installing System Dependencies ==="
+        sudo apt-get update
+        sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtwidgets python3-pyqt5.qtgui python3-pyqt5.qtcore
+        echo "System PyQt5 installation completed"
+    
+    - name: Install Python dependencies
+      run: |
+        echo "=== Installing Python Dependencies ==="
+        pip install --upgrade pip
+        echo "Installing build dependencies..."
+        pip install pyinstaller
+        echo "Installing application dependencies..."
+        pip install pyqtgraph numpy matplotlib h5py emdfile tqdm py4dstem
+        echo "=== Dependency Installation Complete ==="
+        pip list
+    
+    - name: Verify installation
+      run: |
+        echo "=== Verifying Installation ==="
+        python -c "import PyQt5; print('[OK] PyQt5 imported successfully')"
+        python -c "import pyqtgraph; print('[OK] PyQtGraph imported successfully')" 
+        python -c "import numpy; print('[OK] NumPy imported successfully')"
+        python -c "import matplotlib; print('[OK] Matplotlib imported successfully')"
+        python -c "import h5py; print('[OK] h5py imported successfully')"
+        echo "=== All imports successful ==="
+        
+    - name: Test import of main application
+      run: |
+        echo "=== Testing Application Imports ==="
+        python -c "from src.mib_viewer.gui.mib_viewer_pyqtgraph import MibViewerPyQtGraph; print('[OK] Main app class imported')"
+        python -c "from src.mib_viewer.io.mib_loader import load_mib; print('[OK] MIB loading functions imported')"
+        echo "=== Application imports successful ==="
+    
+    - name: Build Linux executable
+      run: |
+        echo "=== Building Linux Executable ==="
+        echo "Strategy 1: Using PyInstaller spec file..."
+        if [ -f "MibViewer.spec" ]; then
+          pyinstaller MibViewer.spec --distpath dist-linux --workpath build-linux
+          if [ -f "dist-linux/MibViewer" ]; then
+            echo "[SUCCESS] Strategy 1: Spec file build completed"
+            exe_size=$(du -m "dist-linux/MibViewer" | cut -f1)
+            echo "Executable size: ${exe_size} MB"
+          else
+            echo "[FAILED] Strategy 1: Spec file build failed"
+          fi
+        fi
+        
+        if [ ! -f "dist-linux/MibViewer" ]; then
+          echo "Strategy 2: Direct PyInstaller command..."
+          pyinstaller --onefile --windowed --name=MibViewer \
+            --add-data "src:src" \
+            --hidden-import=mib_viewer.gui.mib_viewer_pyqtgraph \
+            --hidden-import=mib_viewer.io.mib_loader \
+            --hidden-import=PyQt5 \
+            --hidden-import=pyqtgraph \
+            --hidden-import=numpy \
+            --hidden-import=h5py \
+            --distpath dist-linux \
+            src/mib_viewer/__main__.py
+          
+          if [ -f "dist-linux/MibViewer" ]; then
+            echo "[SUCCESS] Strategy 2: Direct build completed"
+            exe_size=$(du -m "dist-linux/MibViewer" | cut -f1)
+            echo "Executable size: ${exe_size} MB"
+          else
+            echo "[FAILED] Strategy 2: Direct build failed" 
+            exit 1
+          fi
+        fi
+    
+    - name: Verify executable and set permissions
+      run: |
+        echo "=== Verifying Linux Executable ==="
+        if [ -f "dist-linux/MibViewer" ]; then
+          echo "[SUCCESS] Executable created successfully"
+          ls -la "dist-linux/MibViewer"
+          file "dist-linux/MibViewer"
+          echo "Making executable..."
+          chmod +x "dist-linux/MibViewer"
+          echo "Final permissions:"
+          ls -la "dist-linux/MibViewer"
+        else
+          echo "[ERROR] MibViewer executable not found!"
+          echo "Contents of dist-linux directory:"
+          ls -la dist-linux/ || echo "dist-linux directory does not exist"
+          exit 1
+        fi
+    
+    - name: Upload executable as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MibViewer-Linux
+        path: dist-linux/MibViewer
+        retention-days: 30
