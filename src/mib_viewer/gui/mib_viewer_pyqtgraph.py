@@ -185,11 +185,12 @@ class MibViewerPyQtGraph(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MIB EELS Viewer - PyQtGraph")
-        self.resize(1600, 1600)  # Make window square (tall as it is wide)
+        self.resize(800, 800)  # Make window square and appropriate for smaller monitors
         self.center_on_screen()
         
         # Data storage
         self.eels_data = None
+        self.stem4d_data = None  # Add 4D STEM data storage
         self.ndata_data = None
         self.eels_filename = ""
         self.ndata_filename = ""
@@ -197,6 +198,10 @@ class MibViewerPyQtGraph(QMainWindow):
         # Current selections
         self.current_roi = None  # Will store ROI bounds
         self.current_energy_range = (10, 200)  # Default energy range
+        
+        # Plot focus tracking for FFT
+        self.active_plot = None
+        self.plot_widgets = {}  # Will be populated after UI setup
         
         # PyQtGraph items
         self.eels_image_item = None
@@ -675,8 +680,8 @@ class MibViewerPyQtGraph(QMainWindow):
         # Create log text widget
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(200)  # Initial height limit
-        self.log_text.setMinimumHeight(100)  # Minimum height
+        # Remove height constraints to allow expansion with frame
+        self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         # Style the log text widget
         self.log_text.setStyleSheet("""
@@ -822,6 +827,9 @@ class MibViewerPyQtGraph(QMainWindow):
         self.detector_update_timer = QTimer()
         self.detector_update_timer.setSingleShot(True)
         self.detector_update_timer.timeout.connect(self.delayed_calculate_virtual_images)
+        
+        # Setup plot focus tracking after UI is created
+        self.setup_plot_focus_tracking()
     
     def setup_roi_widgets(self):
         """Setup ROI selection widgets"""
@@ -931,14 +939,48 @@ class MibViewerPyQtGraph(QMainWindow):
             # Load the data using universal loader
             raw_data = load_data_file(filename)
             
-            # Flip the energy axis and store
-            self.eels_data = raw_data[:, :, ::-1, :]
+            # Detect experiment type based on data shape
+            experiment_type, exp_info = detect_experiment_type(raw_data.shape)
+            self.log_message(f"Detected experiment type: {experiment_type} - {exp_info['detector_type']}")
             
-            self.eels_filename = os.path.basename(filename)
-            self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type})")
+            if experiment_type == "EELS":
+                # Flip the energy axis for EELS data and store
+                self.eels_data = raw_data[:, :, ::-1, :]
+                self.stem4d_data = None  # Clear 4D STEM data
+                
+                self.eels_filename = os.path.basename(filename)
+                self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type})")
+                
+                # Auto-switch to EELS tab
+                self.tab_widget.setCurrentIndex(0)  # EELS is first tab
+                
+            elif experiment_type == "4D_STEM":
+                # Store as 4D STEM data (no energy axis flip needed)
+                self.stem4d_data = raw_data
+                self.eels_data = None  # Clear EELS data
+                
+                # TODO: Add 4D STEM file label to the 4D STEM tab
+                self.log_message(f"Loaded 4D STEM data: {os.path.basename(filename)} ({file_type})")
+                
+                # Auto-switch to 4D STEM tab
+                self.tab_widget.setCurrentIndex(1)  # 4D STEM is second tab
+                
+            else:
+                # Unknown data type - default to EELS behavior for backward compatibility
+                self.eels_data = raw_data[:, :, ::-1, :]
+                self.stem4d_data = None
+                self.eels_filename = os.path.basename(filename)
+                self.eels_label.setText(f"Unknown Data: {self.eels_filename} ({file_type})")
+                self.tab_widget.setCurrentIndex(0)
             
-            # Initialize ROI to center of image
-            h, w = self.eels_data.shape[:2]
+            # Initialize ROI to center of image  
+            if experiment_type == "EELS" and self.eels_data is not None:
+                h, w = self.eels_data.shape[:2]
+            elif experiment_type == "4D_STEM" and self.stem4d_data is not None:
+                h, w = self.stem4d_data.shape[:2]
+            else:
+                # Fallback for unknown data type
+                h, w = self.eels_data.shape[:2] if self.eels_data is not None else (100, 100)
             if self.roi_mode:
                 # Default ROI (centered, reasonable size, no rotation)
                 roi_size = min(w, h) // 3
@@ -1060,30 +1102,31 @@ class MibViewerPyQtGraph(QMainWindow):
             self.ndata_plot.addItem(self.ndata_roi)
     
     def update_displays(self):
-        """Update all display elements"""
-        # Update EELS image
+        """Update display elements based on data type"""
+        # Only update EELS displays if EELS data is loaded
         if self.eels_data is not None:
             self.update_eels_image()
+            self.update_spectrum()
         
-        # Update ndata image
+        # Only update 4D STEM displays if 4D STEM data is loaded
+        if self.stem4d_data is not None:
+            self.update_4d_displays()
+        
+        # Update ndata image (this is separate data)
         if self.ndata_data is not None:
             self.update_ndata_image()
-        
-        # Update spectrum
-        if self.eels_data is not None:
-            self.update_spectrum()
     
     def update_4d_displays(self):
         """Update 4D STEM displays"""
-        if self.eels_data is None:
+        if self.stem4d_data is None:
             return
         
         # Create scan overview image (integrated over detector)
-        scan_overview = np.sum(self.eels_data, axis=(2, 3))  # Sum over energy and detector
+        scan_overview = np.sum(self.stem4d_data, axis=(2, 3))  # Sum over detector dimensions
         self.scan_image_item.setImage(scan_overview.T)
         
         # Initialize cursor at center
-        h, w = self.eels_data.shape[:2]
+        h, w = self.stem4d_data.shape[:2]
         center_x, center_y = w // 2, h // 2
         self.scan_cursor.setPos([center_x, center_y])
         
@@ -1280,11 +1323,11 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def center_virtual_detectors(self):
         """Center virtual detectors on the diffraction pattern"""
-        if self.eels_data is None:
+        if self.stem4d_data is None:
             return
         
         # Get diffraction pattern center
-        det_h, det_w = self.eels_data.shape[2], self.eels_data.shape[3]
+        det_h, det_w = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
         center_y, center_x = det_h // 2, det_w // 2
         
         # Center BF detector (smaller disk)
@@ -1325,7 +1368,7 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def calculate_virtual_images(self):
         """Calculate BF and DF virtual images for all scan positions"""
-        if self.eels_data is None:
+        if self.stem4d_data is None:
             return
         
         # Get detector geometries
@@ -1345,7 +1388,7 @@ class MibViewerPyQtGraph(QMainWindow):
         df_inner_radius = df_inner_size[0] / 2
         
         # Create coordinate grids for detector pixels
-        det_h, det_w = self.eels_data.shape[2], self.eels_data.shape[3]
+        det_h, det_w = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
         y_coords, x_coords = np.ogrid[:det_h, :det_w]
         
         # Create BF detector mask (disk)
@@ -1356,14 +1399,14 @@ class MibViewerPyQtGraph(QMainWindow):
         df_mask = (dist_from_df_center <= df_outer_radius**2) & (dist_from_df_center >= df_inner_radius**2)
         
         # Calculate virtual images
-        scan_h, scan_w = self.eels_data.shape[:2]
+        scan_h, scan_w = self.stem4d_data.shape[:2]
         bf_image = np.zeros((scan_h, scan_w))
         df_image = np.zeros((scan_h, scan_w))
         
         # Apply masks and sum for each scan position
         for y in range(scan_h):
             for x in range(scan_w):
-                diffraction_pattern = self.eels_data[y, x, :, :]
+                diffraction_pattern = self.stem4d_data[y, x, :, :]
                 bf_image[y, x] = np.sum(diffraction_pattern[bf_mask])
                 df_image[y, x] = np.sum(diffraction_pattern[df_mask])
         
@@ -1373,7 +1416,7 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def on_scan_position_changed(self):
         """Handle scan position change in 4D STEM mode"""
-        if self.eels_data is None:
+        if self.stem4d_data is None:
             return
         
         # Get cursor position
@@ -1381,11 +1424,11 @@ class MibViewerPyQtGraph(QMainWindow):
         scan_x, scan_y = int(pos[0]), int(pos[1])
         
         # Ensure position is within bounds
-        scan_x = max(0, min(scan_x, self.eels_data.shape[1] - 1))
-        scan_y = max(0, min(scan_y, self.eels_data.shape[0] - 1))
+        scan_x = max(0, min(scan_x, self.stem4d_data.shape[1] - 1))
+        scan_y = max(0, min(scan_y, self.stem4d_data.shape[0] - 1))
         
         # Extract and display diffraction pattern at this position
-        diffraction_pattern = self.eels_data[scan_y, scan_x, :, :]
+        diffraction_pattern = self.stem4d_data[scan_y, scan_x, :, :]
         self.diffraction_image_item.setImage(diffraction_pattern.T)
     
     def reset_view(self):
@@ -1414,6 +1457,277 @@ class MibViewerPyQtGraph(QMainWindow):
                          "• Interactive scan position selection\n"
                          "• Virtual imaging capabilities\n"
                          "• Multi-panel synchronized analysis")
+    
+    # Plot focus tracking and FFT methods
+    def setup_plot_focus_tracking(self):
+        """Setup plot widgets dictionary and click tracking for FFT focus"""
+        # Define all plot widgets that can be FFT'd
+        self.plot_widgets = {
+            'eels_image': self.eels_plot,
+            'ndata_image': self.ndata_plot,
+            'spectrum': self.spectrum_plot,
+            'scan_overview': self.scan_plot,
+            'diffraction': self.diffraction_plot,
+            'virtual_bf': self.bf_plot,
+            'virtual_df': self.df_plot
+        }
+        
+        # Add click handlers to track focus
+        for plot_name, plot_widget in self.plot_widgets.items():
+            if plot_widget is not None:
+                # Store original mouse press event
+                original_mouse_press = plot_widget.mousePressEvent
+                # Create new mouse press handler that tracks focus
+                plot_widget.mousePressEvent = lambda event, name=plot_name, original=original_mouse_press: self.on_plot_clicked(name, event, original)
+    
+    def on_plot_clicked(self, plot_name, event, original_handler):
+        """Handle plot click - set as active for FFT and update visual focus"""
+        self.set_active_plot(plot_name)
+        # Call original mouse press handler
+        if original_handler:
+            original_handler(event)
+    
+    def set_active_plot(self, plot_name):
+        """Set active plot and update visual indicators"""
+        # Clear previous focus styling
+        if self.active_plot and self.active_plot in self.plot_widgets:
+            old_widget = self.plot_widgets[self.active_plot]
+            if old_widget is not None:
+                old_widget.setStyleSheet("")
+        
+        # Set new focus
+        self.active_plot = plot_name
+        if plot_name in self.plot_widgets:
+            new_widget = self.plot_widgets[plot_name]
+            if new_widget is not None:
+                # Apply blue focus border
+                new_widget.setStyleSheet("border: 2px solid #0078d4;")
+                
+        # Update status bar to show which plot has focus
+        if hasattr(self, 'statusBar'):
+            plot_display_names = {
+                'eels_image': 'EELS Image',
+                'ndata_image': 'Ndata Image',
+                'spectrum': 'Spectrum', 
+                'scan_overview': 'Scan Overview',
+                'diffraction': 'Diffraction Pattern',
+                'virtual_bf': 'Virtual BF',
+                'virtual_df': 'Virtual DF'
+            }
+            display_name = plot_display_names.get(plot_name, plot_name)
+            self.statusBar().showMessage(f"Active plot for FFT: {display_name}", 3000)
+    
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts"""
+        # Handle Ctrl+F for FFT
+        if event.key() == Qt.Key_F and event.modifiers() == Qt.ControlModifier:
+            self.trigger_fft()
+        else:
+            # Call parent handler for other keys
+            super().keyPressEvent(event)
+    
+    def trigger_fft(self):
+        """Trigger FFT analysis on the currently active plot"""
+        if not self.active_plot:
+            QMessageBox.information(self, "FFT Analysis", 
+                                  "Please click on a plot first to select it for FFT analysis.")
+            return
+        
+        # Get data from active plot
+        data = self.get_active_plot_data()
+        if data is None:
+            QMessageBox.warning(self, "FFT Analysis", 
+                              "No data available for FFT analysis in the selected plot.")
+            return
+        
+        # Perform FFT and display
+        self.perform_fft_analysis(data, self.active_plot)
+    
+    def get_active_plot_data(self):
+        """Get data from the currently active plot"""
+        if not self.active_plot:
+            return None
+            
+        try:
+            if self.active_plot == 'eels_image' and self.eels_data is not None:
+                # Return current EELS integrated image
+                energy_pixels = self.eels_data.shape[2]
+                start_idx = max(0, int(self.current_energy_range[0]))
+                end_idx = min(energy_pixels, int(self.current_energy_range[1]))
+                return np.sum(self.eels_data[:, :, start_idx:end_idx, :], axis=(2, 3))
+                
+            elif self.active_plot == 'ndata_image' and self.ndata_data is not None:
+                # Return ndata image data
+                return self.ndata_data
+                
+            elif self.active_plot == 'spectrum' and self.eels_data is not None:
+                # Return current spectrum data - this would need ROI context
+                # For now, return summed spectrum over all spatial positions
+                return np.sum(self.eels_data, axis=(0, 1, 3))  # Sum over spatial and detector x
+                
+            elif self.active_plot == 'scan_overview' and self.stem4d_data is not None:
+                # Return scan overview (integrated diffraction)
+                return np.sum(self.stem4d_data, axis=(2, 3))
+                
+            elif self.active_plot == 'diffraction' and self.stem4d_data is not None:
+                # Return current diffraction pattern
+                if hasattr(self, 'scan_cursor'):
+                    pos = self.scan_cursor.pos()
+                    scan_x, scan_y = int(pos[0]), int(pos[1])
+                    scan_x = max(0, min(scan_x, self.stem4d_data.shape[1] - 1))
+                    scan_y = max(0, min(scan_y, self.stem4d_data.shape[0] - 1))
+                    return self.stem4d_data[scan_y, scan_x, :, :]
+                else:
+                    # Return center diffraction pattern
+                    center_y, center_x = self.stem4d_data.shape[0] // 2, self.stem4d_data.shape[1] // 2
+                    return self.stem4d_data[center_y, center_x, :, :]
+                    
+            elif self.active_plot == 'virtual_bf' and hasattr(self, 'bf_image_item'):
+                # Return current BF virtual image (would need to be calculated)
+                return None  # TODO: Store BF image data
+                
+            elif self.active_plot == 'virtual_df' and hasattr(self, 'df_image_item'):
+                # Return current DF virtual image (would need to be calculated)
+                return None  # TODO: Store DF image data
+                
+        except Exception as e:
+            print(f"Error getting data for {self.active_plot}: {e}")
+            return None
+        
+        return None
+    
+    def perform_fft_analysis(self, data, plot_name):
+        """Perform FFT analysis and display results"""
+        if data is None:
+            return
+        
+        try:
+            # Perform 2D FFT
+            fft_data = np.fft.fft2(data)
+            fft_shifted = np.fft.fftshift(fft_data)
+            
+            # Create FFT display window with complex data
+            self.show_fft_window(fft_shifted, plot_name)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "FFT Analysis Error", 
+                               f"Error performing FFT analysis: {str(e)}")
+    
+    def show_fft_window(self, fft_complex, source_plot):
+        """Display FFT results in a popup window with controls"""
+        # Create popup window
+        fft_window = QMainWindow()
+        fft_window.setWindowTitle(f"FFT Analysis - {source_plot}")
+        fft_window.resize(1000, 700)
+        
+        # Create central widget with layout
+        central_widget = QWidget()
+        layout = QHBoxLayout(central_widget)
+        
+        # Create plot widget with proper aspect ratio
+        fft_plot = pg.PlotWidget()
+        fft_plot.setLabel('left', 'Frequency Y')
+        fft_plot.setLabel('bottom', 'Frequency X')
+        fft_plot.setAspectLocked(True)  # Lock aspect ratio to prevent stretching
+        
+        # Display FFT data
+        fft_image_item = pg.ImageItem()
+        fft_plot.addItem(fft_image_item)
+        
+        # Create controls panel
+        controls_widget = QWidget()
+        controls_widget.setFixedWidth(200)
+        controls_layout = QVBoxLayout(controls_widget)
+        
+        # Display mode controls
+        display_group = QGroupBox("Display Mode")
+        display_layout = QVBoxLayout(display_group)
+        
+        display_button_group = QButtonGroup()
+        magnitude_radio = QRadioButton("Magnitude (Absolute)")
+        magnitude_radio.setChecked(True)  # Default
+        real_radio = QRadioButton("Real Part")
+        phase_radio = QRadioButton("Phase")
+        
+        display_button_group.addButton(magnitude_radio, 0)
+        display_button_group.addButton(real_radio, 1) 
+        display_button_group.addButton(phase_radio, 2)
+        
+        display_layout.addWidget(magnitude_radio)
+        display_layout.addWidget(real_radio)
+        display_layout.addWidget(phase_radio)
+        
+        # Scale controls
+        scale_group = QGroupBox("Scale")
+        scale_layout = QVBoxLayout(scale_group)
+        
+        scale_button_group = QButtonGroup()
+        log_scale_radio = QRadioButton("Log Scale")
+        log_scale_radio.setChecked(True)  # Default
+        linear_scale_radio = QRadioButton("Linear Scale")
+        
+        scale_button_group.addButton(log_scale_radio, 0)
+        scale_button_group.addButton(linear_scale_radio, 1)
+        
+        scale_layout.addWidget(log_scale_radio)
+        scale_layout.addWidget(linear_scale_radio)
+        
+        # Add groups to controls
+        controls_layout.addWidget(display_group)
+        controls_layout.addWidget(scale_group)
+        controls_layout.addStretch()  # Push controls to top
+        
+        # Add to main layout
+        layout.addWidget(fft_plot, 1)  # Plot takes most space
+        layout.addWidget(controls_widget)
+        
+        fft_window.setCentralWidget(central_widget)
+        
+        # Function to update display
+        def update_fft_display():
+            # Get current display mode
+            display_mode = display_button_group.checkedId()
+            use_log_scale = scale_button_group.checkedId() == 0
+            
+            if display_mode == 0:  # Magnitude
+                data = np.abs(fft_complex)
+                title_suffix = "Magnitude"
+            elif display_mode == 1:  # Real
+                data = np.real(fft_complex)
+                title_suffix = "Real Part"
+            else:  # Phase
+                data = np.angle(fft_complex)
+                title_suffix = "Phase"
+            
+            if use_log_scale and display_mode != 2:  # Don't log scale phase
+                if display_mode == 0:  # Magnitude
+                    data = np.log10(data + 1e-10)
+                    scale_suffix = " (log scale)"
+                else:  # Real part
+                    # For real part, handle negative values differently
+                    data = np.sign(data) * np.log10(np.abs(data) + 1e-10)
+                    scale_suffix = " (signed log scale)"
+            else:
+                scale_suffix = " (linear scale)" if display_mode != 2 else ""
+            
+            fft_image_item.setImage(data.T)
+            fft_plot.setTitle(f'FFT {title_suffix}{scale_suffix} - Source: {source_plot}')
+            fft_plot.autoRange()
+        
+        # Connect radio button changes
+        display_button_group.buttonClicked.connect(update_fft_display)
+        scale_button_group.buttonClicked.connect(update_fft_display)
+        
+        # Initial display
+        update_fft_display()
+        
+        # Store reference to prevent garbage collection
+        if not hasattr(self, 'fft_windows'):
+            self.fft_windows = []
+        self.fft_windows.append(fft_window)
+        
+        # Show window
+        fft_window.show()
     
     # Conversion tab methods
     def browse_input_file(self):
@@ -1744,14 +2058,48 @@ class MibViewerPyQtGraph(QMainWindow):
                 # Load the converted file using the existing loader
                 raw_data = load_data_file(self.last_converted_file)
                 
-                # Flip the energy axis and store (same as regular file loading)
-                self.eels_data = raw_data[:, :, ::-1, :]
+                # Detect experiment type based on data shape
+                experiment_type, exp_info = detect_experiment_type(raw_data.shape)
+                self.log_message(f"Opening converted file - Detected: {experiment_type} - {exp_info['detector_type']}")
                 
-                self.eels_filename = os.path.basename(self.last_converted_file)
-                self.eels_label.setText(f"EELS File: {self.eels_filename} (EMD)")
+                if experiment_type == "EELS":
+                    # Flip the energy axis for EELS data and store
+                    self.eels_data = raw_data[:, :, ::-1, :]
+                    self.stem4d_data = None  # Clear 4D STEM data
+                    
+                    self.eels_filename = os.path.basename(self.last_converted_file)
+                    self.eels_label.setText(f"EELS File: {self.eels_filename} (EMD)")
+                    
+                    # Auto-switch to EELS tab
+                    self.tab_widget.setCurrentIndex(0)
+                    
+                elif experiment_type == "4D_STEM":
+                    # Store as 4D STEM data (no energy axis flip needed)
+                    self.stem4d_data = raw_data
+                    self.eels_data = None  # Clear EELS data
+                    
+                    # Log 4D STEM file loading
+                    self.log_message(f"Opened converted 4D STEM data: {os.path.basename(self.last_converted_file)} (EMD)")
+                    
+                    # Auto-switch to 4D STEM tab
+                    self.tab_widget.setCurrentIndex(1)
+                    
+                else:
+                    # Unknown data type - default to EELS behavior
+                    self.eels_data = raw_data[:, :, ::-1, :]
+                    self.stem4d_data = None
+                    self.eels_filename = os.path.basename(self.last_converted_file)
+                    self.eels_label.setText(f"Unknown Data: {self.eels_filename} (EMD)")
+                    self.tab_widget.setCurrentIndex(0)
                 
                 # Initialize ROI to center of image
-                h, w = self.eels_data.shape[:2]
+                if experiment_type == "EELS" and self.eels_data is not None:
+                    h, w = self.eels_data.shape[:2]
+                elif experiment_type == "4D_STEM" and self.stem4d_data is not None:
+                    h, w = self.stem4d_data.shape[:2]
+                else:
+                    # Fallback for unknown data type
+                    h, w = self.eels_data.shape[:2] if self.eels_data is not None else (100, 100)
                 if self.roi_mode:
                     roi_size = min(w, h) // 3
                     roi_x = (w - roi_size) // 2
