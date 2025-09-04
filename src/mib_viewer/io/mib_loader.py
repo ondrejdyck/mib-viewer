@@ -240,6 +240,189 @@ def load_data_file(path_buffer, scan_size=None):
                 raise ValueError(f"Cannot determine file type or load data from: {path_buffer}")
 
 
+def detect_experiment_type(shape):
+    """Detect experiment type (EELS vs 4D STEM) based on data shape
+    
+    Parameters:
+    -----------
+    shape : tuple
+        4D data shape (scan_y, scan_x, detector_y, detector_x)
+        
+    Returns:
+    --------
+    tuple : (experiment_type, processing_info)
+        experiment_type: "EELS", "4D_STEM", or "UNKNOWN"
+        processing_info: dict with recommended processing options
+    """
+    sy, sx, dy, dx = shape
+    
+    # EELS detection: detector dimensions are not equal (rectangular detector)
+    if dy != dx:
+        # Determine if we can sum in Y direction (need 2D detector, not already summed to 1D)
+        can_sum_y = min(dy, dx) > 1  # Can only sum if both dimensions > 1
+        
+        return "EELS", {
+            'can_sum_y': can_sum_y,
+            'can_bin': False,        # EELS doesn't typically need binning
+            'recommended_processing': 'sum_y' if can_sum_y else 'none',
+            'detector_type': f'EELS spectrometer ({dy}×{dx})',
+            'processing_note': 'Sum in Y direction to reduce data size' if can_sum_y else 'Already summed'
+        }
+    
+    # 4D STEM detection: square detector (equal dimensions)
+    elif dy == dx:
+        valid_factors = get_valid_bin_factors(dy)  # Use actual detector size
+        detector_name = "Quad detector" if dy >= 512 else "Single detector"
+        
+        return "4D_STEM", {
+            'can_sum_y': False,      # 4D STEM shouldn't sum Y
+            'can_bin': True,
+            'valid_bin_factors': valid_factors,
+            'recommended_processing': 'bin_2x2',
+            'detector_type': f'{detector_name} ({dy}×{dx})',
+            'processing_note': 'Binning reduces file size and noise'
+        }
+    
+    # Unknown/unsupported configuration
+    else:
+        return "UNKNOWN", {
+            'can_sum_y': False,
+            'can_bin': False,
+            'recommended_processing': 'none',
+            'detector_type': f'Unknown detector ({dy}×{dx})',
+            'processing_note': 'Unsupported detector configuration'
+        }
+
+
+def get_valid_bin_factors(detector_size):
+    """Get binning factors that evenly divide detector dimension
+    
+    Parameters:
+    -----------
+    detector_size : int
+        Detector dimension (256, 512, etc.)
+        
+    Returns:
+    --------
+    list : Valid binning factors
+    """
+    # Common factors that work well for typical detector sizes
+    candidate_factors = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+    
+    # Return only factors that divide evenly and don't exceed detector size
+    return [f for f in candidate_factors if f <= detector_size and detector_size % f == 0]
+
+
+def apply_data_processing(data_4d, processing_options):
+    """Apply EELS Y-summing and/or 4D binning to data
+    
+    Parameters:
+    -----------
+    data_4d : numpy.ndarray
+        4D data array (scan_y, scan_x, detector_y, detector_x)
+    processing_options : dict
+        Processing options including:
+        - 'sum_y': bool, whether to sum in Y direction
+        - 'bin_factor': int, binning factor for detector dimensions
+        - 'bin_method': str, 'mean' or 'sum'
+        
+    Returns:
+    --------
+    numpy.ndarray : Processed data
+    """
+    original_shape = data_4d.shape
+    
+    # Apply binning first (if requested)
+    if processing_options.get('bin_factor', 1) > 1:
+        data_4d = apply_binning(data_4d, 
+                               processing_options['bin_factor'],
+                               processing_options.get('bin_method', 'mean'))
+        print(f"Applied {processing_options['bin_factor']}x{processing_options['bin_factor']} binning: "
+              f"{original_shape} → {data_4d.shape}")
+    
+    # Apply Y-summing second (if requested)
+    if processing_options.get('sum_y', False):
+        data_4d = np.sum(data_4d, axis=3, keepdims=True)
+        print(f"Applied Y-summing: {data_4d.shape}")
+    
+    return data_4d
+
+
+def apply_binning(data_4d, bin_factor, method='mean'):
+    """Bin 4D data by given factor in detector dimensions
+    
+    Parameters:
+    -----------
+    data_4d : numpy.ndarray
+        4D data array (scan_y, scan_x, detector_y, detector_x)
+    bin_factor : int
+        Binning factor (must divide detector dimensions evenly)
+    method : str
+        'mean' or 'sum' for binning operation
+        
+    Returns:
+    --------
+    numpy.ndarray : Binned data
+    """
+    sy, sx, qy, qx = data_4d.shape
+    
+    # Validate binning factor
+    if qy % bin_factor != 0 or qx % bin_factor != 0:
+        raise ValueError(f"Binning factor {bin_factor} does not divide evenly into "
+                        f"detector dimensions ({qy}×{qx})")
+    
+    # Calculate output dimensions
+    new_qy = qy // bin_factor
+    new_qx = qx // bin_factor
+    
+    # Reshape for binning: (sy, sx, new_qy, bin_factor, new_qx, bin_factor)
+    binned_data = data_4d.reshape(sy, sx, new_qy, bin_factor, new_qx, bin_factor)
+    
+    # Apply binning operation along the bin_factor axes (3 and 5)
+    if method == 'mean':
+        return binned_data.mean(axis=(3, 5))
+    elif method == 'sum':
+        return binned_data.sum(axis=(3, 5))
+    else:
+        raise ValueError(f"Unknown binning method: {method}. Use 'mean' or 'sum'.")
+
+
+def calculate_processed_size(original_shape, processing_options):
+    """Calculate the shape and size after processing
+    
+    Parameters:
+    -----------
+    original_shape : tuple
+        Original 4D shape (scan_y, scan_x, detector_y, detector_x)
+    processing_options : dict
+        Processing options
+        
+    Returns:
+    --------
+    tuple : (new_shape, size_reduction_factor)
+    """
+    sy, sx, qy, qx = original_shape
+    
+    # Apply binning to detector dimensions
+    bin_factor = processing_options.get('bin_factor', 1)
+    if bin_factor > 1:
+        qy = qy // bin_factor
+        qx = qx // bin_factor
+    
+    # Apply Y-summing
+    if processing_options.get('sum_y', False):
+        qx = 1  # Y dimension becomes 1
+    
+    new_shape = (sy, sx, qy, qx)
+    
+    # Calculate size reduction factor
+    original_size = sy * sx * original_shape[2] * original_shape[3]
+    new_size = sy * sx * qy * qx
+    reduction_factor = original_size / new_size if new_size > 0 else 1
+    
+    return new_shape, reduction_factor
+
+
 def get_data_file_info(path_buffer):
     """Get basic information about a data file without loading the full dataset.
     
@@ -251,7 +434,7 @@ def get_data_file_info(path_buffer):
     Returns:
     --------
     dict
-        Dictionary with file information including shape, size, and type
+        Dictionary with file information including shape, size, type, and processing options
     """
     path_str = str(path_buffer).lower()
     
@@ -263,13 +446,18 @@ def get_data_file_info(path_buffer):
                 data_shape = datacube['data'].shape
                 file_size = os.path.getsize(path_buffer)
                 
+                # Detect experiment type and add processing recommendations
+                experiment_type, processing_info = detect_experiment_type(data_shape)
+                
                 return {
                     'file_type': 'EMD 1.0',
                     'shape': data_shape,
                     'size_bytes': file_size,
                     'size_gb': file_size / (1024**3),
                     'compressed': True,  # EMD files are typically compressed
-                    'compatible': True
+                    'compatible': True,
+                    'experiment_type': experiment_type,
+                    'processing_options': processing_info
                 }
         except Exception as e:
             return {'file_type': 'EMD', 'error': str(e), 'compatible': False}
@@ -285,16 +473,22 @@ def get_data_file_info(path_buffer):
             mib_prop = get_mib_properties(head)
             num_frames = filesize // (mib_prop.headsize + np.prod(mib_prop.merlin_size) * 2)
             scan_size = auto_detect_scan_size(num_frames)
+            data_shape = (scan_size[1], scan_size[0], mib_prop.merlin_size[1], mib_prop.merlin_size[0])
+            
+            # Detect experiment type and add processing recommendations
+            experiment_type, processing_info = detect_experiment_type(data_shape)
             
             return {
                 'file_type': 'MIB',
-                'shape': (scan_size[1], scan_size[0], mib_prop.merlin_size[1], mib_prop.merlin_size[0]),
+                'shape': data_shape,
                 'size_bytes': filesize,
                 'size_gb': filesize / (1024**3),
                 'compressed': False,
                 'scan_size': scan_size,
                 'detector_size': mib_prop.merlin_size,
-                'compatible': True
+                'compatible': True,
+                'experiment_type': experiment_type,
+                'processing_options': processing_info
             }
         except Exception as e:
             return {'file_type': 'MIB', 'error': str(e), 'compatible': False}

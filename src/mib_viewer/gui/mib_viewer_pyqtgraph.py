@@ -17,17 +17,24 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
                              QWidget, QPushButton, QLabel, QFileDialog, QMessageBox,
                              QMenuBar, QAction, QStatusBar, QCheckBox, QSizePolicy,
                              QSplitter, QGroupBox, QDesktopWidget, QTabWidget, QLineEdit,
-                             QComboBox, QProgressBar, QTextEdit, QGridLayout, QFrame)
+                             QComboBox, QProgressBar, QTextEdit, QGridLayout, QFrame, 
+                             QRadioButton, QButtonGroup, QSpinBox)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
 
 # Import MIB loading functions
 try:
     # Try relative import (when run as module)
-    from ..io.mib_loader import load_mib, load_emd, load_data_file, get_data_file_info, get_mib_properties, auto_detect_scan_size, MibProperties
+    from ..io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info, 
+                                     get_mib_properties, auto_detect_scan_size, MibProperties,
+                                     detect_experiment_type, apply_data_processing, calculate_processed_size,
+                                     get_valid_bin_factors)
     from ..io.mib_to_emd_converter import MibToEmdConverter
 except ImportError:
     # Fall back for direct execution
-    from mib_viewer.io.mib_loader import load_mib, load_emd, load_data_file, get_data_file_info, get_mib_properties, auto_detect_scan_size, MibProperties
+    from mib_viewer.io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
+                                          get_mib_properties, auto_detect_scan_size, MibProperties,
+                                          detect_experiment_type, apply_data_processing, calculate_processed_size,
+                                          get_valid_bin_factors)
     from mib_viewer.io.mib_to_emd_converter import MibToEmdConverter
 
 # Configure PyQtGraph
@@ -40,14 +47,21 @@ class ConversionWorker(QObject):
     progress_updated = pyqtSignal(int, str)  # progress percentage, status message
     conversion_finished = pyqtSignal(dict)   # conversion statistics
     conversion_failed = pyqtSignal(str)      # error message
+    log_message_signal = pyqtSignal(str, str)  # message, level - Qt-safe logging signal
     
-    def __init__(self, input_path, output_path, compression, compression_level):
+    def __init__(self, input_path, output_path, compression, compression_level, processing_options=None, log_callback=None):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
         self.compression = compression
         self.compression_level = compression_level
+        self.log_callback = log_callback
+        self.processing_options = processing_options or {}
         self.cancelled = False
+    
+    def qt_safe_log(self, message, level="INFO"):
+        """Qt-safe logging that emits signal instead of direct callback"""
+        self.log_message_signal.emit(message, level)
     
     def run_conversion(self):
         """Run the conversion process with progress updates"""
@@ -55,7 +69,8 @@ class ConversionWorker(QObject):
             # Create converter
             converter = MibToEmdConverter(
                 compression=self.compression,
-                compression_level=self.compression_level
+                compression_level=self.compression_level,
+                log_callback=self.qt_safe_log  # Use Qt-safe logging
             )
             
             # Phase 1: Analyze file (5% of progress)
@@ -124,7 +139,7 @@ class ConversionWorker(QObject):
         def do_conversion():
             nonlocal conversion_result, conversion_error
             try:
-                conversion_result['stats'] = converter.convert_to_emd(self.input_path, self.output_path)
+                conversion_result['stats'] = converter.convert_to_emd(self.input_path, self.output_path, processing_options=self.processing_options)
             except Exception as e:
                 conversion_error = e
         
@@ -528,6 +543,72 @@ class MibViewerPyQtGraph(QMainWindow):
         
         output_layout.addLayout(compression_layout, 2, 0, 1, 3)
         
+        # Data Processing section
+        processing_group = QGroupBox("Data Processing")
+        processing_layout = QVBoxLayout(processing_group)
+        
+        # Experiment type display
+        self.experiment_type_label = QLabel("Select input file to see data type")
+        self.experiment_type_label.setStyleSheet("color: #666; font-style: italic;")
+        processing_layout.addWidget(self.experiment_type_label)
+        
+        # Processing options (initially hidden)
+        self.processing_options_widget = QWidget()
+        self.processing_options_widget.setVisible(False)
+        processing_options_layout = QVBoxLayout(self.processing_options_widget)
+        
+        # Radio button group for processing mode
+        self.processing_button_group = QButtonGroup()
+        
+        # EELS Y-summing option
+        self.sum_y_radio = QRadioButton("Sum in Y direction (EELS)")
+        self.processing_button_group.addButton(self.sum_y_radio, 0)
+        processing_options_layout.addWidget(self.sum_y_radio)
+        
+        # 4D binning option
+        binning_widget = QWidget()
+        binning_layout = QHBoxLayout(binning_widget)
+        binning_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.binning_radio = QRadioButton("Binning:")
+        self.processing_button_group.addButton(self.binning_radio, 1)
+        binning_layout.addWidget(self.binning_radio)
+        
+        self.bin_factor_combo = QComboBox()
+        self.bin_factor_combo.addItems(['1x1', '2x2', '4x4', '8x8', '16x16'])
+        self.bin_factor_combo.setCurrentText('2x2')
+        binning_layout.addWidget(self.bin_factor_combo)
+        
+        self.bin_method_combo = QComboBox()
+        self.bin_method_combo.addItems(['Mean', 'Sum'])
+        self.bin_method_combo.setCurrentText('Mean')
+        binning_layout.addWidget(self.bin_method_combo)
+        
+        binning_layout.addStretch()
+        processing_options_layout.addWidget(binning_widget)
+        
+        # Advanced mode (both operations)
+        self.advanced_radio = QRadioButton("Advanced: Bin then Sum Y")
+        self.processing_button_group.addButton(self.advanced_radio, 2)
+        processing_options_layout.addWidget(self.advanced_radio)
+        
+        advanced_warning = QLabel("⚠️ Warning: Unusual processing combination")
+        advanced_warning.setStyleSheet("color: orange; font-size: 9pt; margin-left: 20px;")
+        processing_options_layout.addWidget(advanced_warning)
+        
+        # No processing option (default)
+        self.no_processing_radio = QRadioButton("No processing")
+        self.no_processing_radio.setChecked(True)  # Default selection
+        self.processing_button_group.addButton(self.no_processing_radio, 3)
+        processing_options_layout.addWidget(self.no_processing_radio)
+        
+        # Connect signals for UI updates
+        self.processing_button_group.buttonToggled.connect(self.update_processing_ui)
+        self.bin_factor_combo.currentTextChanged.connect(self.update_conversion_preview)
+        self.bin_method_combo.currentTextChanged.connect(self.update_conversion_preview)
+        
+        processing_layout.addWidget(self.processing_options_widget)
+        
         # Preview section
         preview_group = QGroupBox("Conversion Preview")
         preview_layout = QVBoxLayout(preview_group)
@@ -573,6 +654,7 @@ class MibViewerPyQtGraph(QMainWindow):
         # Add all groups to main layout
         main_layout.addWidget(input_group)
         main_layout.addWidget(output_group)
+        main_layout.addWidget(processing_group)
         main_layout.addWidget(preview_group)
         main_layout.addWidget(conversion_group)
         main_layout.addStretch()
@@ -1376,6 +1458,9 @@ class MibViewerPyQtGraph(QMainWindow):
                 self.file_info_label.setText(info_text)
                 self.file_info_label.setStyleSheet("color: #000;")
                 
+                # Update experiment type and processing options
+                self.update_experiment_type_display(file_info)
+                
                 # Enable conversion button
                 self.convert_btn.setEnabled(True)
                 
@@ -1442,14 +1527,46 @@ class MibViewerPyQtGraph(QMainWindow):
             else:
                 ratio = compression_ratios.get(compression_algo, {}).get('default', 1.0)
             
-            estimated_size_gb = input_size_gb / ratio if ratio > 1 else input_size_gb * 1.25
-            estimated_time = max(5, int(input_size_gb * 10))  # Rough estimate: 10s per GB
+            # Calculate data processing impact
+            processing_options = self.get_processing_options()
+            original_shape = file_info['shape']
+            processed_shape, processing_reduction = calculate_processed_size(original_shape, processing_options)
             
-            preview_text = (f"Input size: {input_size_gb:.2f} GB\n"
-                          f"Estimated output size: {estimated_size_gb:.2f} GB "
-                          f"({ratio:.1f}x compression)\n"
-                          f"Estimated conversion time: ~{estimated_time} seconds")
+            # Calculate total size after processing and compression
+            processed_size_gb = input_size_gb / processing_reduction
+            final_size_gb = processed_size_gb / ratio if ratio > 1 else processed_size_gb * 1.25
             
+            # Calculate total reduction factor
+            total_reduction = input_size_gb / final_size_gb
+            
+            # Estimate time (processing adds some overhead)
+            processing_time_factor = 1.0
+            if processing_options['bin_factor'] > 1 or processing_options['sum_y']:
+                processing_time_factor = 1.2  # 20% overhead for processing
+            
+            estimated_time = max(5, int(input_size_gb * 10 * processing_time_factor))
+            
+            # Build preview text
+            preview_lines = [f"Input size: {input_size_gb:.2f} GB ({original_shape})"]
+            
+            if processing_reduction > 1:
+                preview_lines.append(f"After processing: {processed_size_gb:.2f} GB ({processed_shape}) • {processing_reduction:.1f}x reduction")
+            
+            preview_lines.extend([
+                f"Final output size: {final_size_gb:.2f} GB ({total_reduction:.1f}x total reduction)",
+                f"Estimated time: ~{estimated_time} seconds"
+            ])
+            
+            # Add processing description
+            if processing_options['sum_y'] and processing_options['bin_factor'] > 1:
+                preview_lines.append(f"Processing: {processing_options['bin_factor']}x{processing_options['bin_factor']} binning → Y-sum")
+            elif processing_options['sum_y']:
+                preview_lines.append("Processing: Sum in Y direction")
+            elif processing_options['bin_factor'] > 1:
+                method = processing_options['bin_method'].capitalize()
+                preview_lines.append(f"Processing: {processing_options['bin_factor']}x{processing_options['bin_factor']} binning ({method})")
+            
+            preview_text = "\n".join(preview_lines)
             self.preview_label.setText(preview_text)
             self.preview_label.setStyleSheet("color: #000; padding: 10px;")
             
@@ -1504,9 +1621,13 @@ class MibViewerPyQtGraph(QMainWindow):
         self.conversion_progress.setValue(0)
         self.conversion_status.setText("Initializing conversion...")
         
+        # Get processing options from UI
+        processing_options = self.get_processing_options()
+        
         # Create worker and thread
         self.conversion_worker = ConversionWorker(
-            input_path, output_path, compression, compression_level
+            input_path, output_path, compression, compression_level, 
+            processing_options=processing_options
         )
         self.conversion_thread = QThread()
         
@@ -1517,6 +1638,7 @@ class MibViewerPyQtGraph(QMainWindow):
         self.conversion_worker.progress_updated.connect(self.on_conversion_progress)
         self.conversion_worker.conversion_finished.connect(self.on_conversion_finished)
         self.conversion_worker.conversion_failed.connect(self.on_conversion_failed)
+        self.conversion_worker.log_message_signal.connect(self.log_message)  # Qt-safe logging
         
         # Log conversion start
         self.log_message(f"Starting conversion: {os.path.basename(input_path)} → {output_filename}")
@@ -1653,6 +1775,102 @@ class MibViewerPyQtGraph(QMainWindow):
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load converted file:\n{str(e)}")
+    
+    # Data processing UI methods
+    def update_experiment_type_display(self, file_info):
+        """Update the experiment type display and processing options"""
+        exp_type = file_info.get('experiment_type', 'UNKNOWN')
+        processing_info = file_info.get('processing_options', {})
+        
+        # Update experiment type label
+        detector_type = processing_info.get('detector_type', 'Unknown detector')
+        self.experiment_type_label.setText(f"Auto-detected: {exp_type} ({detector_type})")
+        self.experiment_type_label.setStyleSheet("color: #000; font-weight: bold;")
+        
+        # Show processing options
+        self.processing_options_widget.setVisible(True)
+        
+        # Configure UI based on experiment type
+        if exp_type == "EELS":
+            self.sum_y_radio.setEnabled(processing_info.get('can_sum_y', False))
+            self.binning_radio.setEnabled(False)
+            self.bin_factor_combo.setEnabled(False)
+            self.bin_method_combo.setEnabled(False)
+            self.advanced_radio.setEnabled(processing_info.get('can_sum_y', False))
+            
+            # Select recommended processing
+            if processing_info.get('recommended_processing') == 'sum_y':
+                self.sum_y_radio.setChecked(True)
+            else:
+                self.no_processing_radio.setChecked(True)
+                
+        elif exp_type == "4D_STEM":
+            self.sum_y_radio.setEnabled(False)
+            self.binning_radio.setEnabled(True)
+            self.bin_factor_combo.setEnabled(True)
+            self.bin_method_combo.setEnabled(True)
+            self.advanced_radio.setEnabled(False)
+            
+            # Update bin factor options
+            valid_factors = processing_info.get('valid_bin_factors', [1, 2, 4, 8])
+            self.update_bin_factor_options(valid_factors)
+            
+            # Select recommended processing
+            if processing_info.get('recommended_processing') == 'bin_2x2':
+                self.binning_radio.setChecked(True)
+            else:
+                self.no_processing_radio.setChecked(True)
+                
+        else:  # UNKNOWN
+            self.sum_y_radio.setEnabled(False)
+            self.binning_radio.setEnabled(False)
+            self.bin_factor_combo.setEnabled(False)
+            self.bin_method_combo.setEnabled(False)
+            self.advanced_radio.setEnabled(False)
+            self.no_processing_radio.setChecked(True)
+    
+    def update_bin_factor_options(self, valid_factors):
+        """Update the bin factor combo box with valid options"""
+        self.bin_factor_combo.clear()
+        for factor in valid_factors:
+            if factor > 1:  # Skip 1x1 (no binning)
+                self.bin_factor_combo.addItem(f"{factor}x{factor}")
+    
+    def update_processing_ui(self):
+        """Update UI elements based on selected processing option"""
+        # Enable/disable combo boxes based on selected radio button
+        binning_selected = self.binning_radio.isChecked() or self.advanced_radio.isChecked()
+        self.bin_factor_combo.setEnabled(binning_selected)
+        self.bin_method_combo.setEnabled(binning_selected)
+        
+        # Update preview
+        self.update_conversion_preview()
+    
+    def get_processing_options(self):
+        """Get the current processing options from UI"""
+        processing_options = {
+            'sum_y': False,
+            'bin_factor': 1,
+            'bin_method': 'mean'
+        }
+        
+        if self.sum_y_radio.isChecked():
+            processing_options['sum_y'] = True
+        elif self.binning_radio.isChecked():
+            # Parse bin factor from "4x4" format
+            bin_text = self.bin_factor_combo.currentText()
+            if 'x' in bin_text:
+                processing_options['bin_factor'] = int(bin_text.split('x')[0])
+            processing_options['bin_method'] = self.bin_method_combo.currentText().lower()
+        elif self.advanced_radio.isChecked():
+            # Both operations
+            processing_options['sum_y'] = True
+            bin_text = self.bin_factor_combo.currentText()
+            if 'x' in bin_text:
+                processing_options['bin_factor'] = int(bin_text.split('x')[0])
+            processing_options['bin_method'] = self.bin_method_combo.currentText().lower()
+        
+        return processing_options
 
 def main():
     """Main entry point for the PyQtGraph application"""

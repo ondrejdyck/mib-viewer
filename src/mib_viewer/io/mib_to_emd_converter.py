@@ -25,20 +25,20 @@ from tqdm import tqdm
 # Import our MIB loading functions
 try:
     # Try relative import (when run as module)
-    from .mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties
+    from .mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
 except ImportError:
     # Fall back for direct execution
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from io.mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties
+    from io.mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
 
 class MibToEmdConverter:
     """
     Converter for MIB files to EMD 1.0 format with py4DSTEM compatibility
     """
     
-    def __init__(self, compression='gzip', compression_level=6, chunk_size=None):
+    def __init__(self, compression='gzip', compression_level=6, chunk_size=None, log_callback=None):
         """
         Initialize converter with compression settings
         
@@ -50,10 +50,26 @@ class MibToEmdConverter:
             Compression level (1-9 for gzip, ignored for others)
         chunk_size : tuple or None
             HDF5 chunk size (sy, sx, qy, qx). If None, auto-determined.
+        log_callback : callable or None
+            Function to call for logging messages. Should accept (message, level) parameters.
         """
         self.compression = compression
         self.compression_level = compression_level if compression == 'gzip' else None
         self.chunk_size = chunk_size
+        self.log_callback = log_callback
+    
+    def log(self, message, level="INFO"):
+        """Log message to both terminal and GUI (if callback provided)"""
+        # Always print to terminal for backward compatibility
+        print(message)
+        
+        # Also send to GUI if callback is provided
+        if self.log_callback:
+            try:
+                self.log_callback(message, level)
+            except Exception:
+                # Don't let GUI logging errors break the conversion
+                pass
         
     def analyze_mib_file(self, mib_path: str) -> Dict[str, Any]:
         """
@@ -63,7 +79,7 @@ class MibToEmdConverter:
         --------
         dict : Metadata dictionary with file properties
         """
-        print(f"Analyzing MIB file: {os.path.basename(mib_path)}")
+        self.log(f"Analyzing MIB file: {os.path.basename(mib_path)}")
         
         # Read header
         with open(mib_path, 'rb') as f:
@@ -106,16 +122,20 @@ class MibToEmdConverter:
             except (ValueError, IndexError):
                 pass
         
-        print(f"  Shape: {metadata['shape_4d']}")
-        print(f"  Size: {metadata['filesize_gb']:.2f} GB")
-        print(f"  Frames: {metadata['num_frames']:,}")
-        print(f"  Detector: {metadata['detector_size']}")
+        self.log(f"  Shape: {metadata['shape_4d']}")
+        self.log(f"  Size: {metadata['filesize_gb']:.2f} GB")
+        self.log(f"  Frames: {metadata['num_frames']:,}")
+        self.log(f"  Detector: {metadata['detector_size']}")
         
         return metadata
     
     def determine_optimal_chunks(self, shape_4d: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         """
-        Determine optimal chunk size based on data shape and access patterns
+        Determine optimal chunk size based on data shape and threading strategy
+        
+        Uses frame-based chunking (1, 1, qy, qx) for optimal threading performance.
+        Compression benchmark shows <5% penalty vs larger chunks but enables 
+        perfect parallelization for future multithreading.
         
         Parameters:
         -----------
@@ -131,33 +151,30 @@ class MibToEmdConverter:
         
         sy, sx, qy, qx = shape_4d
         
-        # Target ~10MB chunks based on our benchmarking
-        target_chunk_mb = 10
-        bytes_per_pixel = 2  # uint16
-        target_elements = (target_chunk_mb * 1024 * 1024) // bytes_per_pixel
+        # Frame-based chunking for threading optimization
+        # Each chunk = one detector frame at one scan position
+        chunk_sy = 1
+        chunk_sx = 1 
+        chunk_qy = qy  # Full detector height
+        chunk_qx = qx  # Full detector width
         
-        # Balanced chunking strategy - good for both real and reciprocal space access
-        chunk_sy = min(16, sy)
-        chunk_sx = min(16, sx)
-        
-        # Adjust detector chunking to hit target size
-        remaining_elements = target_elements // (chunk_sy * chunk_sx)
-        chunk_qy = min(qy, int(np.sqrt(remaining_elements)))
-        chunk_qx = min(qx, remaining_elements // chunk_qy)
-        
-        # Ensure chunks don't exceed data dimensions
-        chunk_sy = min(chunk_sy, sy)
-        chunk_sx = min(chunk_sx, sx)
-        chunk_qy = min(chunk_qy, qy)
-        chunk_qx = min(chunk_qx, qx)
+        # Handle edge cases for processed data
+        if chunk_qy == 0 or chunk_qx == 0:
+            # Fallback to minimal valid chunks
+            chunk_qy = max(1, qy)
+            chunk_qx = max(1, qx)
         
         chunks = (chunk_sy, chunk_sx, chunk_qy, chunk_qx)
+        
+        # Calculate chunk size for logging
+        bytes_per_pixel = 2  # uint16
         chunk_mb = (chunk_sy * chunk_sx * chunk_qy * chunk_qx * bytes_per_pixel) / (1024**2)
         
-        print(f"  Optimal chunks: {chunks} (~{chunk_mb:.1f} MB per chunk)")
+        self.log(f"  Frame-based chunks: {chunks} (~{chunk_mb:.2f} MB per chunk)")
+        self.log(f"  Threading-optimized for future multithreading")
         return chunks
     
-    def convert_to_emd(self, mib_path: str, emd_path: str, metadata_extra: Optional[Dict] = None) -> Dict[str, Any]:
+    def convert_to_emd(self, mib_path: str, emd_path: str, metadata_extra: Optional[Dict] = None, processing_options: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Convert MIB file to EMD 1.0 format
         
@@ -169,12 +186,14 @@ class MibToEmdConverter:
             Path to output EMD/HDF5 file
         metadata_extra : dict, optional
             Additional metadata to include
+        processing_options : dict, optional
+            Data processing options (binning, Y-summing)
             
         Returns:
         --------
         dict : Conversion statistics
         """
-        print(f"\nStarting conversion: {os.path.basename(mib_path)} → {os.path.basename(emd_path)}")
+        self.log(f"\nStarting conversion: {os.path.basename(mib_path)} → {os.path.basename(emd_path)}")
         
         # Analyze input file
         metadata = self.analyze_mib_file(mib_path)
@@ -182,19 +201,47 @@ class MibToEmdConverter:
             metadata.update(metadata_extra)
         
         # Load MIB data
-        print("\nLoading MIB data...")
+        self.log("\nLoading MIB data...")
         start_time = time.time()
         
         data_4d = load_mib(mib_path, metadata['scan_size'])
         
         load_time = time.time() - start_time
-        print(f"  Loaded in {load_time:.1f}s")
+        self.log(f"  Loaded in {load_time:.1f}s")
         
-        # Determine chunking
+        # Apply data processing if specified
+        if processing_options:
+            self.log("\nApplying data processing...")
+            processing_start = time.time()
+            
+            # Log what processing is being applied
+            if processing_options.get('sum_y', False):
+                self.log("  Summing in Y direction (EELS processing)")
+            if processing_options.get('bin_factor', 1) > 1:
+                bin_factor = processing_options['bin_factor']
+                bin_method = processing_options.get('bin_method', 'mean')
+                self.log(f"  Applying {bin_factor}x{bin_factor} binning ({bin_method})")
+            
+            # Apply processing
+            original_shape = data_4d.shape
+            data_4d = apply_data_processing(data_4d, processing_options)
+            processed_shape = data_4d.shape
+            
+            processing_time = time.time() - processing_start
+            self.log(f"  Processing completed in {processing_time:.1f}s")
+            self.log(f"  Shape: {original_shape} → {processed_shape}")
+            
+            # Update metadata to reflect processed shape
+            metadata['shape_4d'] = processed_shape
+            metadata['original_shape_4d'] = original_shape
+            if 'processing_applied' not in metadata:
+                metadata['processing_applied'] = processing_options.copy()
+        
+        # Determine chunking based on final processed shape
         chunks = self.determine_optimal_chunks(metadata['shape_4d'])
         
         # Create EMD file
-        print(f"\nCreating EMD file with {self.compression} compression...")
+        self.log(f"\nCreating EMD file with {self.compression} compression...")
         start_time = time.time()
         
         # Prepare compression kwargs
@@ -222,7 +269,7 @@ class MibToEmdConverter:
             datacube_group.attrs['emd_group_type'] = 'array'
             
             # Create main dataset with compression and progress bar
-            print(f"  Writing 4D dataset: {metadata['shape_4d']}")
+            self.log(f"  Writing 4D dataset: {metadata['shape_4d']}")
             dataset = datacube_group.create_dataset(
                 'data', 
                 data=data_4d,
@@ -290,11 +337,11 @@ class MibToEmdConverter:
             'total_time_s': load_time + write_time
         }
         
-        print(f"\nConversion completed!")
-        print(f"  Input size: {stats['input_size_gb']:.2f} GB")
-        print(f"  Output size: {stats['output_size_gb']:.2f} GB") 
-        print(f"  Compression ratio: {stats['compression_ratio']:.1f}x")
-        print(f"  Total time: {stats['total_time_s']:.1f}s")
+        self.log(f"\nConversion completed!")
+        self.log(f"  Input size: {stats['input_size_gb']:.2f} GB")
+        self.log(f"  Output size: {stats['output_size_gb']:.2f} GB") 
+        self.log(f"  Compression ratio: {stats['compression_ratio']:.1f}x")
+        self.log(f"  Total time: {stats['total_time_s']:.1f}s")
         
         return stats
 
