@@ -33,16 +33,16 @@ def get_mib_properties(head):
     """Parse header of a MIB data and return object containing frame parameters"""
     fp = MibProperties()
     
-    # Read detector size
+    # Read detector size - QD gives (width, height)
     fp.merlin_size = (int(head[4]), int(head[5]))
     
     # Test if RAW
     if head[6] == 'R64':
         fp.raw = True
     
-    if head[7].endswith('2x2'):
+    if '2x2' in head[7]:
         fp.detectorgeometry = '2x2'
-    if head[7].endswith('Nx1G'):
+    if 'Nx1' in head[7]:
         fp.detectorgeometry = 'Nx1'
     
     # Test if single
@@ -148,7 +148,10 @@ def load_mib(path_buffer, scan_size=None):
         shape=mib_prop.scan_size
     )
     
-    return data['data']
+    # Transpose detector dimensions to convert from (width, height) to (height, width)
+    # This fixes the transposition issue where QD gives (width, height) but we expect (height, width)
+    raw_data = data['data']
+    return np.transpose(raw_data, (0, 1, 3, 2))
 
 
 def load_emd(path_buffer):
@@ -195,7 +198,10 @@ def load_emd(path_buffer):
             if len(data.shape) != 4:
                 raise ValueError(f"Expected 4D data, got {len(data.shape)}D with shape {data.shape}")
             
-            return data
+            # Apply same transpose as MIB loader for consistency
+            # Convert from stored (scan_y, scan_x, detector_width, detector_height) 
+            # to expected (scan_y, scan_x, detector_height, detector_width)
+            return np.transpose(data, (0, 1, 3, 2))
             
     except OSError as e:
         if "Unable to open file" in str(e):

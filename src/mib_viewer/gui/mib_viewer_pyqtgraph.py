@@ -203,6 +203,9 @@ class MibViewerPyQtGraph(QMainWindow):
         self.active_plot = None
         self.plot_widgets = {}  # Will be populated after UI setup
         
+        # FFT window tracking
+        self.fft_windows = {}  # Dict to track open FFT windows by plot name
+        
         # PyQtGraph items
         self.eels_image_item = None
         self.ndata_image_item = None
@@ -804,21 +807,30 @@ class MibViewerPyQtGraph(QMainWindow):
         self.scan_plot.addItem(self.scan_cursor)
         
         # Virtual detector overlays on diffraction pattern
-        # BF detector - resizable centered disk
-        self.bf_detector = pg.CircleROI([0, 0], [50, 50], pen='g', movable=False, removable=False)
+        # Add DF detectors first (bottom layers) so BF detector can be clicked when overlapping
+        
+        # DF detector - movable annular ring  
+        # Using separate outer and inner circles that move together
+        self.df_detector_outer = pg.CircleROI([0, 0], [100, 100], pen='b', movable=True, removable=False)
+        self.df_detector_outer.sigRegionChanged.connect(self.on_df_outer_changed)
+        self.diffraction_plot.addItem(self.df_detector_outer)
+        
+        # Inner boundary of annular detector - also movable but coupled to outer
+        self.df_detector_inner = pg.CircleROI([0, 0], [60, 60], pen='b', movable=True, removable=False)
+        self.df_detector_inner.sigRegionChanged.connect(self.on_df_inner_changed)
+        self.diffraction_plot.addItem(self.df_detector_inner)
+        
+        # BF detector - movable and resizable disk (added last so it's on top)
+        self.bf_detector = pg.CircleROI([0, 0], [50, 50], pen='g', movable=True, removable=False)
         self.bf_detector.sigRegionChanged.connect(self.on_detector_changed)
         self.diffraction_plot.addItem(self.bf_detector)
         
-        # DF detector - resizable centered annular ring  
-        # Using EllipseROI for outer boundary
-        self.df_detector_outer = pg.CircleROI([0, 0], [100, 100], pen='b', movable=False, removable=False)
-        self.df_detector_outer.sigRegionChanged.connect(self.on_detector_changed)
-        self.diffraction_plot.addItem(self.df_detector_outer)
+        # Flag to prevent infinite recursion during coupled movement
+        self._updating_df_detectors = False
         
-        # Inner boundary of annular detector
-        self.df_detector_inner = pg.CircleROI([0, 0], [60, 60], pen='b', movable=False, removable=False)
-        self.df_detector_inner.sigRegionChanged.connect(self.on_detector_changed)
-        self.diffraction_plot.addItem(self.df_detector_inner)
+        # Snap-to-center functionality
+        self._shift_pressed = False
+        self._snap_threshold = 20  # pixels - distance from center to trigger snap
         
         # Initialize detector visibility
         self.detector_overlays_visible = True
@@ -945,8 +957,8 @@ class MibViewerPyQtGraph(QMainWindow):
             
             if experiment_type == "EELS":
                 # Flip the energy axis for EELS data and store
-                self.eels_data = raw_data[:, :, ::-1, :]
-                self.stem4d_data = None  # Clear 4D STEM data
+                # After transpose, energy axis is now the last dimension (index 3) for EELS
+                self.eels_data = raw_data[:, :, :, ::-1]
                 
                 self.eels_filename = os.path.basename(filename)
                 self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type})")
@@ -957,7 +969,6 @@ class MibViewerPyQtGraph(QMainWindow):
             elif experiment_type == "4D_STEM":
                 # Store as 4D STEM data (no energy axis flip needed)
                 self.stem4d_data = raw_data
-                self.eels_data = None  # Clear EELS data
                 
                 # TODO: Add 4D STEM file label to the 4D STEM tab
                 self.log_message(f"Loaded 4D STEM data: {os.path.basename(filename)} ({file_type})")
@@ -967,8 +978,7 @@ class MibViewerPyQtGraph(QMainWindow):
                 
             else:
                 # Unknown data type - default to EELS behavior for backward compatibility
-                self.eels_data = raw_data[:, :, ::-1, :]
-                self.stem4d_data = None
+                self.eels_data = raw_data[:, :, :, ::-1]
                 self.eels_filename = os.path.basename(filename)
                 self.eels_label.setText(f"Unknown Data: {self.eels_filename} ({file_type})")
                 self.tab_widget.setCurrentIndex(0)
@@ -1145,12 +1155,14 @@ class MibViewerPyQtGraph(QMainWindow):
             return
         
         # Integrate over current energy range
-        energy_pixels = self.eels_data.shape[2]
+        # After transpose, EELS energy axis is in dimension 3 (last dimension)
+        energy_pixels = self.eels_data.shape[3]
         start_idx = max(0, int(self.current_energy_range[0]))
         end_idx = min(energy_pixels, int(self.current_energy_range[1]))
         
         # Integrate EELS data over energy and detector dimensions
-        integrated = np.sum(self.eels_data[:, :, start_idx:end_idx, :], axis=(2, 3))
+        # For EELS: integrate over all detector dimensions (2, 3)
+        integrated = np.sum(self.eels_data[:, :, :, start_idx:end_idx], axis=(2, 3))
         
         # Set image data (PyQtGraph automatically handles scaling and display)
         self.eels_image_item.setImage(integrated.T)  # Transpose for correct orientation
@@ -1192,7 +1204,8 @@ class MibViewerPyQtGraph(QMainWindow):
                 
                 # Extract ROI and average
                 roi_data = self.eels_data[y:y2, x:x2, :, :]
-                avg_spectrum = np.mean(roi_data, axis=(0, 1, 3))
+                # Average over spatial (0,1) and detector y (2), keep energy (3)
+                avg_spectrum = np.mean(roi_data, axis=(0, 1, 2))
             else:
                 # For rotated ROI, use center point for now (could be enhanced later)
                 center_x, center_y = int(x + w/2), int(y + h/2)
@@ -1207,7 +1220,8 @@ class MibViewerPyQtGraph(QMainWindow):
                 y2 = min(self.eels_data.shape[0], center_y + region_size)
                 
                 roi_data = self.eels_data[y1:y2, x1:x2, :, :]
-                avg_spectrum = np.mean(roi_data, axis=(0, 1, 3))
+                # Average over spatial (0,1) and detector y (2), keep energy (3)
+                avg_spectrum = np.mean(roi_data, axis=(0, 1, 2))
             
         elif not self.roi_mode and self.current_roi is not None:
             # Crosshair mode - single point spectrum
@@ -1215,8 +1229,8 @@ class MibViewerPyQtGraph(QMainWindow):
             x, y = int(max(0, min(x, self.eels_data.shape[1] - 1))), int(max(0, min(y, self.eels_data.shape[0] - 1)))
             
             # Extract single point spectrum and average over detector
-            point_data = self.eels_data[y, x, :, :]
-            avg_spectrum = np.mean(point_data, axis=1)
+            point_data = self.eels_data[y, x, :, :]  # Shape: (1, 1024) after transpose
+            avg_spectrum = np.mean(point_data, axis=0)  # Average over detector y (axis 0), result: (1024,)
         else:
             return
         
@@ -1281,6 +1295,9 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Update EELS image with new energy integration
         self.update_eels_image()
+        
+        # Update EELS image FFT if window is open
+        self.update_fft_windows('eels_image')
     
     def on_log_toggle(self, checked):
         """Handle log scale toggle"""
@@ -1345,15 +1362,103 @@ class MibViewerPyQtGraph(QMainWindow):
         self.df_detector_inner.setPos([center_x - df_inner_radius, center_y - df_inner_radius])
         self.df_detector_inner.setSize([2 * df_inner_radius, 2 * df_inner_radius])
     
+    def check_snap_to_center(self, detector):
+        """Check if detector should snap to center when Shift is pressed"""
+        if not self._shift_pressed or self.stem4d_data is None:
+            return False
+        
+        # Get diffraction pattern center
+        qy, qx = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
+        center_x, center_y = qx / 2, qy / 2
+        
+        # Get detector center
+        detector_pos = detector.pos()
+        detector_size = detector.size()
+        detector_center_x = detector_pos[0] + detector_size[0] / 2
+        detector_center_y = detector_pos[1] + detector_size[1] / 2
+        
+        # Calculate distance from center
+        distance = np.sqrt((detector_center_x - center_x)**2 + (detector_center_y - center_y)**2)
+        
+        # If within snap threshold, snap to center
+        if distance <= self._snap_threshold:
+            new_x = center_x - detector_size[0] / 2
+            new_y = center_y - detector_size[1] / 2
+            detector.setPos([new_x, new_y])
+            return True
+        
+        return False
+
     def on_detector_changed(self):
-        """Handle virtual detector geometry changes - use timer to delay recalculation"""
+        """Handle BF detector geometry changes - use timer to delay recalculation"""
+        # Check for snap-to-center first
+        self.check_snap_to_center(self.bf_detector)
+        
         # For performance, only update when we're actively viewing 4D tab
         current_tab = self.tab_widget.currentIndex()
         if current_tab == 1:  # 4D STEM tab
-            # Stop any existing timer and restart it with a 300ms delay
+            # Stop any existing timer and restart it with a 500ms delay
             # This allows smooth resizing before triggering the expensive recalculation
             self.detector_update_timer.stop()
-            self.detector_update_timer.start(300)  # 300ms delay
+            self.detector_update_timer.start(500)  # 500ms delay
+    
+    def on_df_outer_changed(self):
+        """Handle DF outer detector changes - synchronize inner detector position"""
+        if self._updating_df_detectors:
+            return  # Prevent recursion
+        
+        self._updating_df_detectors = True
+        try:
+            # Check for snap-to-center first
+            snapped = self.check_snap_to_center(self.df_detector_outer)
+            
+            # Get outer detector center (potentially updated by snap)
+            outer_pos = self.df_detector_outer.pos()
+            outer_size = self.df_detector_outer.size()
+            outer_center_x = outer_pos[0] + outer_size[0] / 2
+            outer_center_y = outer_pos[1] + outer_size[1] / 2
+            
+            # Keep inner detector centered within outer detector
+            inner_size = self.df_detector_inner.size()
+            new_inner_x = outer_center_x - inner_size[0] / 2
+            new_inner_y = outer_center_y - inner_size[1] / 2
+            
+            self.df_detector_inner.setPos([new_inner_x, new_inner_y])
+            
+            # Trigger virtual image recalculation
+            self.on_detector_changed()
+            
+        finally:
+            self._updating_df_detectors = False
+    
+    def on_df_inner_changed(self):
+        """Handle DF inner detector changes - synchronize outer detector position"""
+        if self._updating_df_detectors:
+            return  # Prevent recursion
+            
+        self._updating_df_detectors = True
+        try:
+            # Check for snap-to-center first
+            snapped = self.check_snap_to_center(self.df_detector_inner)
+            
+            # Get inner detector center (potentially updated by snap)
+            inner_pos = self.df_detector_inner.pos()
+            inner_size = self.df_detector_inner.size()
+            inner_center_x = inner_pos[0] + inner_size[0] / 2
+            inner_center_y = inner_pos[1] + inner_size[1] / 2
+            
+            # Keep outer detector centered on inner detector
+            outer_size = self.df_detector_outer.size()
+            new_outer_x = inner_center_x - outer_size[0] / 2
+            new_outer_y = inner_center_y - outer_size[1] / 2
+            
+            self.df_detector_outer.setPos([new_outer_x, new_outer_y])
+            
+            # Trigger virtual image recalculation
+            self.on_detector_changed()
+            
+        finally:
+            self._updating_df_detectors = False
     
     def on_detector_overlay_toggle(self, checked):
         """Toggle visibility of virtual detector overlays"""
@@ -1365,6 +1470,9 @@ class MibViewerPyQtGraph(QMainWindow):
     def delayed_calculate_virtual_images(self):
         """Called by timer after detector geometry changes to recalculate virtual images"""
         self.calculate_virtual_images()
+        
+        # Update virtual detector FFTs if windows are open
+        self.update_fft_windows(['virtual_bf', 'virtual_df'])
     
     def calculate_virtual_images(self):
         """Calculate BF and DF virtual images for all scan positions"""
@@ -1410,6 +1518,10 @@ class MibViewerPyQtGraph(QMainWindow):
                 bf_image[y, x] = np.sum(diffraction_pattern[bf_mask])
                 df_image[y, x] = np.sum(diffraction_pattern[df_mask])
         
+        # Store virtual image data for FFT access
+        self.bf_virtual_image = bf_image
+        self.df_virtual_image = df_image
+        
         # Display virtual images
         self.bf_image_item.setImage(bf_image.T)
         self.df_image_item.setImage(df_image.T)
@@ -1430,6 +1542,9 @@ class MibViewerPyQtGraph(QMainWindow):
         # Extract and display diffraction pattern at this position
         diffraction_pattern = self.stem4d_data[scan_y, scan_x, :, :]
         self.diffraction_image_item.setImage(diffraction_pattern.T)
+        
+        # Update diffraction pattern FFT if window is open
+        self.update_fft_windows('diffraction')
     
     def reset_view(self):
         """Reset all plot views to show full data"""
@@ -1519,12 +1634,25 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts"""
+        # Track Shift key for snap-to-center functionality
+        if event.key() == Qt.Key_Shift:
+            self._shift_pressed = True
+        
         # Handle Ctrl+F for FFT
         if event.key() == Qt.Key_F and event.modifiers() == Qt.ControlModifier:
             self.trigger_fft()
         else:
             # Call parent handler for other keys
             super().keyPressEvent(event)
+    
+    def keyReleaseEvent(self, event):
+        """Handle keyboard key releases"""
+        # Track Shift key release
+        if event.key() == Qt.Key_Shift:
+            self._shift_pressed = False
+        
+        # Call parent handler
+        super().keyReleaseEvent(event)
     
     def trigger_fft(self):
         """Trigger FFT analysis on the currently active plot"""
@@ -1550,20 +1678,19 @@ class MibViewerPyQtGraph(QMainWindow):
             
         try:
             if self.active_plot == 'eels_image' and self.eels_data is not None:
-                # Return current EELS integrated image
-                energy_pixels = self.eels_data.shape[2]
+                # Return current EELS integrated image - match display logic
+                energy_pixels = self.eels_data.shape[3]  # Energy is in dimension 3
                 start_idx = max(0, int(self.current_energy_range[0]))
                 end_idx = min(energy_pixels, int(self.current_energy_range[1]))
-                return np.sum(self.eels_data[:, :, start_idx:end_idx, :], axis=(2, 3))
+                return np.sum(self.eels_data[:, :, :, start_idx:end_idx], axis=(2, 3))
                 
             elif self.active_plot == 'ndata_image' and self.ndata_data is not None:
                 # Return ndata image data
                 return self.ndata_data
                 
             elif self.active_plot == 'spectrum' and self.eels_data is not None:
-                # Return current spectrum data - this would need ROI context
-                # For now, return summed spectrum over all spatial positions
-                return np.sum(self.eels_data, axis=(0, 1, 3))  # Sum over spatial and detector x
+                # Spectrum is 1D data - not suitable for 2D FFT
+                return None
                 
             elif self.active_plot == 'scan_overview' and self.stem4d_data is not None:
                 # Return scan overview (integrated diffraction)
@@ -1582,13 +1709,13 @@ class MibViewerPyQtGraph(QMainWindow):
                     center_y, center_x = self.stem4d_data.shape[0] // 2, self.stem4d_data.shape[1] // 2
                     return self.stem4d_data[center_y, center_x, :, :]
                     
-            elif self.active_plot == 'virtual_bf' and hasattr(self, 'bf_image_item'):
-                # Return current BF virtual image (would need to be calculated)
-                return None  # TODO: Store BF image data
+            elif self.active_plot == 'virtual_bf' and hasattr(self, 'bf_virtual_image'):
+                # Return current BF virtual image
+                return self.bf_virtual_image
                 
-            elif self.active_plot == 'virtual_df' and hasattr(self, 'df_image_item'):
-                # Return current DF virtual image (would need to be calculated)
-                return None  # TODO: Store DF image data
+            elif self.active_plot == 'virtual_df' and hasattr(self, 'df_virtual_image'):
+                # Return current DF virtual image
+                return self.df_virtual_image
                 
         except Exception as e:
             print(f"Error getting data for {self.active_plot}: {e}")
@@ -1615,6 +1742,13 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def show_fft_window(self, fft_complex, source_plot):
         """Display FFT results in a popup window with controls"""
+        # Close existing window for this plot if it exists
+        if source_plot in self.fft_windows:
+            try:
+                self.fft_windows[source_plot]['window'].close()
+            except:
+                pass
+        
         # Create popup window
         fft_window = QMainWindow()
         fft_window.setWindowTitle(f"FFT Analysis - {source_plot}")
@@ -1684,7 +1818,11 @@ class MibViewerPyQtGraph(QMainWindow):
         fft_window.setCentralWidget(central_widget)
         
         # Function to update display
-        def update_fft_display():
+        def update_fft_display(new_fft_complex=None):
+            nonlocal fft_complex
+            if new_fft_complex is not None:
+                fft_complex = new_fft_complex
+                
             # Get current display mode
             display_mode = display_button_group.checkedId()
             use_log_scale = scale_button_group.checkedId() == 0
@@ -1721,13 +1859,43 @@ class MibViewerPyQtGraph(QMainWindow):
         # Initial display
         update_fft_display()
         
-        # Store reference to prevent garbage collection
-        if not hasattr(self, 'fft_windows'):
-            self.fft_windows = []
-        self.fft_windows.append(fft_window)
+        # Store window reference and update function
+        self.fft_windows[source_plot] = {
+            'window': fft_window,
+            'update_func': update_fft_display
+        }
         
         # Show window
         fft_window.show()
+    
+    def update_fft_windows(self, plot_names=None):
+        """Update FFT windows with current data"""
+        if plot_names is None:
+            # Update all open FFT windows
+            plot_names = list(self.fft_windows.keys())
+        elif isinstance(plot_names, str):
+            # Convert single plot name to list
+            plot_names = [plot_names]
+        
+        for plot_name in plot_names:
+            if plot_name in self.fft_windows:
+                try:
+                    # Get current data for this plot
+                    saved_active_plot = self.active_plot
+                    self.active_plot = plot_name
+                    data = self.get_active_plot_data()
+                    self.active_plot = saved_active_plot
+                    
+                    if data is not None:
+                        # Perform FFT
+                        fft_data = np.fft.fft2(data)
+                        fft_shifted = np.fft.fftshift(fft_data)
+                        
+                        # Update the window
+                        self.fft_windows[plot_name]['update_func'](fft_shifted)
+                        
+                except Exception as e:
+                    print(f"Error updating FFT window for {plot_name}: {e}")
     
     # Conversion tab methods
     def browse_input_file(self):
@@ -2064,8 +2232,8 @@ class MibViewerPyQtGraph(QMainWindow):
                 
                 if experiment_type == "EELS":
                     # Flip the energy axis for EELS data and store
-                    self.eels_data = raw_data[:, :, ::-1, :]
-                    self.stem4d_data = None  # Clear 4D STEM data
+                    # After transpose, energy axis is now the last dimension (index 3) for EELS
+                    self.eels_data = raw_data[:, :, :, ::-1]
                     
                     self.eels_filename = os.path.basename(self.last_converted_file)
                     self.eels_label.setText(f"EELS File: {self.eels_filename} (EMD)")
@@ -2076,7 +2244,6 @@ class MibViewerPyQtGraph(QMainWindow):
                 elif experiment_type == "4D_STEM":
                     # Store as 4D STEM data (no energy axis flip needed)
                     self.stem4d_data = raw_data
-                    self.eels_data = None  # Clear EELS data
                     
                     # Log 4D STEM file loading
                     self.log_message(f"Opened converted 4D STEM data: {os.path.basename(self.last_converted_file)} (EMD)")
@@ -2086,8 +2253,7 @@ class MibViewerPyQtGraph(QMainWindow):
                     
                 else:
                     # Unknown data type - default to EELS behavior
-                    self.eels_data = raw_data[:, :, ::-1, :]
-                    self.stem4d_data = None
+                    self.eels_data = raw_data[:, :, :, ::-1]
                     self.eels_filename = os.path.basename(self.last_converted_file)
                     self.eels_label.setText(f"Unknown Data: {self.eels_filename} (EMD)")
                     self.tab_widget.setCurrentIndex(0)

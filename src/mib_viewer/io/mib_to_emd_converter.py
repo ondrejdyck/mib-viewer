@@ -297,6 +297,10 @@ class MibToEmdConverter:
             datacube_group['dim4'].attrs['name'] = 'detector_x'
             datacube_group['dim4'].attrs['units'] = 'pixel'
             
+            # Add dimension convention documentation
+            datacube_group.attrs['dimension_order'] = 'scan_y, scan_x, detector_y, detector_x'
+            datacube_group.attrs['dimension_convention'] = 'MIB Viewer format: EELS energy in detector_x dimension'
+            
             # Metadata group
             metadata_group = version_group.create_group('metadata')
             microscope_group = metadata_group.create_group('microscope')
