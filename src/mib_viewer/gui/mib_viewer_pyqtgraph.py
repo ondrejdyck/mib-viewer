@@ -206,6 +206,10 @@ class MibViewerPyQtGraph(QMainWindow):
         # FFT window tracking
         self.fft_windows = {}  # Dict to track open FFT windows by plot name
         
+        # FFT ROI tracking
+        self.fft_rois = {}  # Track FFT ROIs: (plot_name, window_id) -> roi_instance
+        self.fft_roi_counter = 0  # Unique window IDs for FFT ROIs
+        
         # PyQtGraph items
         self.eels_image_item = None
         self.ndata_image_item = None
@@ -1723,6 +1727,51 @@ class MibViewerPyQtGraph(QMainWindow):
         
         return None
     
+    def get_active_plot_data_with_roi(self, plot_name, window_id):
+        """Get data from the specified plot, optionally cropped by FFT ROI"""
+        # Get the base data using the existing method
+        saved_active_plot = self.active_plot
+        self.active_plot = plot_name
+        data = self.get_active_plot_data()
+        self.active_plot = saved_active_plot
+        
+        if data is None:
+            return None
+        
+        # Check if there's an FFT ROI for this plot/window
+        roi_key = (plot_name, window_id)
+        if roi_key not in self.fft_rois:
+            # No ROI, return full data
+            return data
+        
+        try:
+            # Get ROI geometry
+            fft_roi = self.fft_rois[roi_key]
+            roi_pos = fft_roi.pos()
+            roi_size = fft_roi.size()
+            
+            # Convert ROI coordinates to array indices
+            # ROI gives us: pos = [x, y], size = [width, height]
+            x_start = int(max(0, roi_pos[0]))
+            y_start = int(max(0, roi_pos[1]))
+            x_end = int(min(data.shape[1], roi_pos[0] + roi_size[0]))
+            y_end = int(min(data.shape[0], roi_pos[1] + roi_size[1]))
+            
+            # Ensure we have a valid region
+            if x_start >= x_end or y_start >= y_end:
+                print(f"Warning: Invalid ROI region for {plot_name}")
+                return data
+            
+            # Extract ROI region
+            roi_data = data[y_start:y_end, x_start:x_end]
+            
+            print(f"FFT ROI extraction: Full shape {data.shape} → ROI shape {roi_data.shape}")
+            return roi_data
+            
+        except Exception as e:
+            print(f"Error extracting ROI data for {plot_name}: {e}")
+            return data  # Fallback to full data
+    
     def perform_fft_analysis(self, data, plot_name):
         """Perform FFT analysis and display results"""
         if data is None:
@@ -1740,12 +1789,38 @@ class MibViewerPyQtGraph(QMainWindow):
             QMessageBox.critical(self, "FFT Analysis Error", 
                                f"Error performing FFT analysis: {str(e)}")
     
+    def perform_fft_analysis_with_roi(self, plot_name, window_id):
+        """Perform FFT analysis with ROI support"""
+        # Get data (with ROI if applicable)
+        data = self.get_active_plot_data_with_roi(plot_name, window_id)
+        
+        if data is None:
+            return None
+        
+        try:
+            # Perform 2D FFT
+            fft_data = np.fft.fft2(data)
+            fft_shifted = np.fft.fftshift(fft_data)
+            return fft_shifted
+            
+        except Exception as e:
+            print(f"Error performing FFT analysis: {e}")
+            return None
+    
     def show_fft_window(self, fft_complex, source_plot):
         """Display FFT results in a popup window with controls"""
+        # Generate unique window ID for FFT ROI tracking
+        self.fft_roi_counter += 1
+        window_id = self.fft_roi_counter
+        
         # Close existing window for this plot if it exists
         if source_plot in self.fft_windows:
             try:
-                self.fft_windows[source_plot]['window'].close()
+                old_window = self.fft_windows[source_plot]
+                # Clean up any existing FFT ROI for this plot
+                if 'window_id' in old_window:
+                    self.cleanup_fft_roi(source_plot, old_window['window_id'])
+                old_window['window'].close()
             except:
                 pass
         
@@ -1806,9 +1881,18 @@ class MibViewerPyQtGraph(QMainWindow):
         scale_layout.addWidget(log_scale_radio)
         scale_layout.addWidget(linear_scale_radio)
         
+        # ROI controls
+        roi_group = QGroupBox("Region Selection")
+        roi_layout = QVBoxLayout(roi_group)
+        
+        roi_checkbox = QCheckBox("Use ROI")
+        roi_checkbox.setChecked(False)  # Default to full image
+        roi_layout.addWidget(roi_checkbox)
+        
         # Add groups to controls
         controls_layout.addWidget(display_group)
         controls_layout.addWidget(scale_group)
+        controls_layout.addWidget(roi_group)
         controls_layout.addStretch()  # Push controls to top
         
         # Add to main layout
@@ -1852,9 +1936,23 @@ class MibViewerPyQtGraph(QMainWindow):
             fft_plot.setTitle(f'FFT {title_suffix}{scale_suffix} - Source: {source_plot}')
             fft_plot.autoRange()
         
-        # Connect radio button changes
+        # Function to handle ROI checkbox
+        def on_roi_checkbox_changed(checked):
+            if checked:
+                # Create FFT ROI on the source plot
+                self.create_fft_roi(source_plot, window_id)
+                # Update FFT with initial ROI data
+                self.on_fft_roi_changed(source_plot, window_id)
+            else:
+                # Remove FFT ROI
+                self.remove_fft_roi(source_plot, window_id)
+                # Update FFT back to full data
+                update_fft_display()
+        
+        # Connect controls
         display_button_group.buttonClicked.connect(update_fft_display)
         scale_button_group.buttonClicked.connect(update_fft_display)
+        roi_checkbox.toggled.connect(on_roi_checkbox_changed)
         
         # Initial display
         update_fft_display()
@@ -1862,11 +1960,91 @@ class MibViewerPyQtGraph(QMainWindow):
         # Store window reference and update function
         self.fft_windows[source_plot] = {
             'window': fft_window,
+            'window_id': window_id,
             'update_func': update_fft_display
         }
         
+        # Handle window close event to clean up ROI
+        def on_fft_window_close():
+            self.cleanup_fft_roi(source_plot, window_id)
+            # Remove from tracking
+            if source_plot in self.fft_windows:
+                del self.fft_windows[source_plot]
+        
+        # Connect close event
+        fft_window.closeEvent = lambda event: (on_fft_window_close(), event.accept())
+        
         # Show window
         fft_window.show()
+    
+    def create_fft_roi(self, plot_name, window_id):
+        """Create an FFT ROI on the specified plot"""
+        if plot_name not in self.plot_widgets:
+            print(f"Warning: Plot {plot_name} not found")
+            return
+        
+        plot_widget = self.plot_widgets[plot_name]
+        roi_key = (plot_name, window_id)
+        
+        # Don't create if already exists
+        if roi_key in self.fft_rois:
+            return
+        
+        # Create ROI with orange color and distinct appearance
+        fft_roi = pg.ROI([50, 50], [100, 100], pen='orange', movable=True, resizable=True, removable=False)
+        
+        # Add corner handles for resizing
+        fft_roi.addScaleHandle([1, 1], [0, 0])    # Bottom-right handle
+        fft_roi.addScaleHandle([0, 0], [1, 1])    # Top-left handle  
+        fft_roi.addScaleHandle([1, 0], [0, 1])    # Top-right handle
+        fft_roi.addScaleHandle([0, 1], [1, 0])    # Bottom-left handle
+        
+        # Connect ROI change signal for real-time FFT updates
+        fft_roi.sigRegionChanged.connect(lambda: self.on_fft_roi_changed(plot_name, window_id))
+        
+        # Add to plot and track
+        plot_widget.addItem(fft_roi)
+        self.fft_rois[roi_key] = fft_roi
+        
+        print(f"Created FFT ROI for {plot_name}, window {window_id}")
+    
+    def remove_fft_roi(self, plot_name, window_id):
+        """Remove an FFT ROI from the specified plot"""
+        roi_key = (plot_name, window_id)
+        
+        if roi_key not in self.fft_rois:
+            return
+        
+        plot_widget = self.plot_widgets[plot_name]
+        fft_roi = self.fft_rois[roi_key]
+        
+        # Remove from plot
+        plot_widget.removeItem(fft_roi)
+        
+        # Remove from tracking
+        del self.fft_rois[roi_key]
+        
+        print(f"Removed FFT ROI for {plot_name}, window {window_id}")
+    
+    def cleanup_fft_roi(self, plot_name, window_id):
+        """Clean up FFT ROI when window is closed"""
+        self.remove_fft_roi(plot_name, window_id)
+    
+    def on_fft_roi_changed(self, plot_name, window_id):
+        """Handle FFT ROI changes - update FFT in real-time"""
+        if plot_name not in self.fft_windows:
+            return
+        
+        try:
+            # Get new FFT data with updated ROI
+            fft_shifted = self.perform_fft_analysis_with_roi(plot_name, window_id)
+            
+            if fft_shifted is not None:
+                # Update the FFT display
+                self.fft_windows[plot_name]['update_func'](fft_shifted)
+                
+        except Exception as e:
+            print(f"Error updating FFT after ROI change for {plot_name}: {e}")
     
     def update_fft_windows(self, plot_names=None):
         """Update FFT windows with current data"""
@@ -1880,11 +2058,11 @@ class MibViewerPyQtGraph(QMainWindow):
         for plot_name in plot_names:
             if plot_name in self.fft_windows:
                 try:
-                    # Get current data for this plot
-                    saved_active_plot = self.active_plot
-                    self.active_plot = plot_name
-                    data = self.get_active_plot_data()
-                    self.active_plot = saved_active_plot
+                    # Get window ID for ROI-aware data extraction
+                    window_id = self.fft_windows[plot_name]['window_id']
+                    
+                    # Get current data for this plot (with ROI if applicable)
+                    data = self.get_active_plot_data_with_roi(plot_name, window_id)
                     
                     if data is not None:
                         # Perform FFT
