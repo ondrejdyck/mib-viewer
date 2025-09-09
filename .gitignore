@@ -68,6 +68,7 @@ test_outputs/
 # Example data files (large, not for repo)
 *.mib
 *.ndata1
+*.emd
 Example*4D/
 Example*EELS*/
 
