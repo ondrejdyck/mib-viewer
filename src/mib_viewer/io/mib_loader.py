@@ -198,10 +198,10 @@ def load_emd(path_buffer):
             if len(data.shape) != 4:
                 raise ValueError(f"Expected 4D data, got {len(data.shape)}D with shape {data.shape}")
             
-            # Apply same transpose as MIB loader for consistency
-            # Convert from stored (scan_y, scan_x, detector_width, detector_height) 
-            # to expected (scan_y, scan_x, detector_height, detector_width)
-            return np.transpose(data, (0, 1, 3, 2))
+            # EMD files store data that's already been processed by load_mib() 
+            # which means the detector dimensions are already transposed correctly
+            # No additional transpose needed - return data as-is
+            return data
             
     except OSError as e:
         if "Unable to open file" in str(e):

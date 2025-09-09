@@ -955,6 +955,9 @@ class MibViewerPyQtGraph(QMainWindow):
             # Load the data using universal loader
             raw_data = load_data_file(filename)
             
+            # Log the loaded data dimensions
+            self.log_message(f"Loaded data shape: {raw_data.shape} (scan_y, scan_x, detector_y, detector_x)")
+            
             # Detect experiment type based on data shape
             experiment_type, exp_info = detect_experiment_type(raw_data.shape)
             self.log_message(f"Detected experiment type: {experiment_type} - {exp_info['detector_type']}")
@@ -1223,8 +1226,15 @@ class MibViewerPyQtGraph(QMainWindow):
                 
                 # Extract ROI and average
                 roi_data = self.eels_data[y:y2, x:x2, :, :]
-                # Average over spatial (0,1) and detector y (2), keep energy (3)
-                avg_spectrum = np.mean(roi_data, axis=(0, 1, 2))
+                # Average over spatial dimensions first
+                spatial_avg = np.mean(roi_data, axis=(0, 1))  # Shape: (dy, dx)
+                # Now average over the shorter detector dimension (non-energy axis)
+                if spatial_avg.shape[0] > spatial_avg.shape[1]:
+                    # Energy is in axis 0, average over axis 1
+                    avg_spectrum = np.mean(spatial_avg, axis=1)
+                else:
+                    # Energy is in axis 1, average over axis 0
+                    avg_spectrum = np.mean(spatial_avg, axis=0)
             else:
                 # For rotated ROI, use center point for now (could be enhanced later)
                 center_x, center_y = int(x + w/2), int(y + h/2)
@@ -1239,8 +1249,15 @@ class MibViewerPyQtGraph(QMainWindow):
                 y2 = min(self.eels_data.shape[0], center_y + region_size)
                 
                 roi_data = self.eels_data[y1:y2, x1:x2, :, :]
-                # Average over spatial (0,1) and detector y (2), keep energy (3)
-                avg_spectrum = np.mean(roi_data, axis=(0, 1, 2))
+                # Average over spatial dimensions first
+                spatial_avg = np.mean(roi_data, axis=(0, 1))  # Shape: (dy, dx)
+                # Now average over the shorter detector dimension (non-energy axis)
+                if spatial_avg.shape[0] > spatial_avg.shape[1]:
+                    # Energy is in axis 0, average over axis 1
+                    avg_spectrum = np.mean(spatial_avg, axis=1)
+                else:
+                    # Energy is in axis 1, average over axis 0
+                    avg_spectrum = np.mean(spatial_avg, axis=0)
             
         elif not self.roi_mode and self.current_roi is not None:
             # Crosshair mode - single point spectrum
@@ -1248,8 +1265,14 @@ class MibViewerPyQtGraph(QMainWindow):
             x, y = int(max(0, min(x, self.eels_data.shape[1] - 1))), int(max(0, min(y, self.eels_data.shape[0] - 1)))
             
             # Extract single point spectrum and average over detector
-            point_data = self.eels_data[y, x, :, :]  # Shape: (1, 1024) after transpose
-            avg_spectrum = np.mean(point_data, axis=0)  # Average over detector y (axis 0), result: (1024,)
+            point_data = self.eels_data[y, x, :, :]  # Shape: (dy, dx) where one is 1, other is energy
+            # Average over the shorter dimension (non-energy axis) to get energy spectrum
+            if point_data.shape[0] > point_data.shape[1]:
+                # Energy is in axis 0, average over axis 1
+                avg_spectrum = np.mean(point_data, axis=1)
+            else:
+                # Energy is in axis 1, average over axis 0  
+                avg_spectrum = np.mean(point_data, axis=0)
         else:
             return
         
