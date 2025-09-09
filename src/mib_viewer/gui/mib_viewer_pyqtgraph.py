@@ -370,6 +370,21 @@ class MibViewerPyQtGraph(QMainWindow):
         self.roi_checkbox.toggled.connect(self.on_roi_mode_toggle)
         controls_group_layout.addWidget(self.roi_checkbox)
         
+        # Colormap selection
+        colormap_label = QLabel("Colormap:")
+        controls_group_layout.addWidget(colormap_label)
+        
+        self.colormap_combo = QComboBox()
+        # Include grayscale (default PyQtGraph behavior) plus color options
+        self.colormap_combo.addItems([
+            "gray", "viridis", "plasma", "inferno", "magma", 
+            "turbo", "cividis"
+        ])
+        self.colormap_combo.setCurrentText("gray")  # Default (original behavior)
+        self.colormap_combo.currentTextChanged.connect(self.on_colormap_changed)
+        self.colormap_combo.setToolTip("Select colormap for image displays")
+        controls_group_layout.addWidget(self.colormap_combo)
+        
         controls_group_layout.addStretch()
         controls_layout.addWidget(controls_group)
         controls_layout.addStretch()
@@ -776,6 +791,8 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def setup_plots(self):
         """Initialize PyQtGraph plot items"""
+        # Start with default grayscale (no colormap) to preserve original behavior
+        
         # EELS tab items
         self.eels_image_item = pg.ImageItem()
         self.eels_plot.addItem(self.eels_image_item)
@@ -1354,6 +1371,51 @@ class MibViewerPyQtGraph(QMainWindow):
         else:
             self.spectrum_plot.setLabel('left', 'Intensity')
     
+    def on_colormap_changed(self, colormap_name):
+        """Handle colormap selection change"""
+        # Handle grayscale (default PyQtGraph behavior)
+        if colormap_name == "gray":
+            colormap = None  # No colormap = default grayscale
+        else:
+            # Get the colormap
+            try:
+                colormap = pg.colormap.get(colormap_name)
+            except:
+                # Fallback to no colormap (grayscale) if colormap not found
+                colormap = None
+        
+        # Apply colormap to all image items
+        image_items = [
+            self.eels_image_item,
+            self.ndata_image_item,
+            self.scan_image_item,
+            self.diffraction_image_item,
+            self.bf_image_item,
+            self.df_image_item
+        ]
+        
+        for item in image_items:
+            if item is not None:
+                if colormap is None:
+                    # Reset to default grayscale by removing the colormap property
+                    # PyQtGraph uses a gray colormap as default when no colormap is set
+                    try:
+                        # Try to reset to default by setting a grayscale colormap
+                        gray_colormap = pg.ColorMap([0, 1], [[0, 0, 0], [255, 255, 255]])
+                        item.setColorMap(gray_colormap)
+                    except:
+                        # If that fails, try using a built-in grayscale approach
+                        # Create a simple linear grayscale colormap
+                        pos = [0.0, 1.0]
+                        color = [[0, 0, 0, 255], [255, 255, 255, 255]]  # Black to white
+                        gray_colormap = pg.ColorMap(pos, color)
+                        item.setColorMap(gray_colormap)
+                else:
+                    item.setColorMap(colormap)
+        
+        # Update displays to show new colormap
+        self.update_displays()
+    
     def on_roi_mode_toggle(self, checked):
         """Handle ROI mode toggle"""
         old_mode = self.roi_mode
@@ -1879,6 +1941,9 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Display FFT data
         fft_image_item = pg.ImageItem()
+        # Apply current colormap to FFT window
+        current_colormap = self.colormap_combo.currentText() if hasattr(self, 'colormap_combo') else 'viridis'
+        fft_image_item.setColorMap(pg.colormap.get(current_colormap))
         fft_plot.addItem(fft_image_item)
         
         # Create controls panel

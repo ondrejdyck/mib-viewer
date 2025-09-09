@@ -158,7 +158,7 @@ def save_as_emd(data_4d, filename, energy_axis=None, metadata=None):
                 metadata_group.attrs[key] = value
 
 def main():
-    """Generate test datasets"""
+    """Generate test datasets including reshape-corrupted data"""
     
     # Create output directory
     output_dir = Path("test_data")
@@ -167,34 +167,60 @@ def main():
     print("=== Generating Fake 4D EELS Test Data ===\n")
     
     # Generate main test dataset (64x64, 256x1024)
-    print("1. Main test dataset (64×64 scan, 256×1024 detector)")
-    data_4d, energy_axis, peaks = create_fake_eels_data(
+    print("1. Correct EELS dataset (64×64 scan, 256×1024 detector)")
+    data_correct, energy_axis, peaks = create_fake_eels_data(
         scan_shape=(64, 64),
         detector_shape=(256, 1024),
         energy_range=(0, 2048)
     )
     
-    # Save as EMD
-    emd_filename = output_dir / "fake_4d_eels_64x64_256x1024.emd"
-    save_as_emd(data_4d, emd_filename, energy_axis, {
+    # Save correct version
+    emd_filename_correct = output_dir / "eels_correct_64x64_256x1024.emd"
+    save_as_emd(data_correct, emd_filename_correct, energy_axis, {
         'scan_size': (64, 64),
         'detector_size': (256, 1024),
-        'peaks': str(peaks)
+        'peaks': str(peaks),
+        'description': 'Correct EELS data'
     })
     
-    print(f"✓ Saved: {emd_filename}")
-    print(f"  Shape: {data_4d.shape}")
-    print(f"  Size: {os.path.getsize(emd_filename) / 1024**2:.1f} MB")
+    print(f"✓ Saved: {emd_filename_correct}")
+    print(f"  Shape: {data_correct.shape}")
+    print(f"  Size: {os.path.getsize(emd_filename_correct) / 1024**2:.1f} MB")
     
-    # Generate smaller test dataset for quick testing
-    print("\n2. Small test dataset (16×16 scan, 256×1024 detector)")
+    # Generate RESHAPE-CORRUPTED version 
+    print("\n2. RESHAPE-CORRUPTED dataset (garbled by np.reshape)")
+    print(f"   Original: {data_correct.shape} (64, 64, 256, 1024)")
+    
+    # This is the corruption: reshape (64,64,256,1024) → (64,64,1024,256)
+    # Same total elements but completely scrambled detector layout
+    data_garbled = data_correct.reshape(64, 64, 1024, 256)
+    
+    print(f"   Reshaped: {data_garbled.shape} (64, 64, 1024, 256)")
+    print("   ⚠️  DETECTOR DATA IS NOW COMPLETELY SCRAMBLED!")
+    print("   ⚠️  Energy axis destroyed, spectra will be garbage")
+    
+    # Save corrupted version
+    emd_filename_garbled = output_dir / "eels_GARBLED_64x64_1024x256.emd"
+    save_as_emd(data_garbled, emd_filename_garbled, None, {  # No energy axis for garbled
+        'scan_size': (64, 64),
+        'detector_size': (1024, 256),
+        'corruption_type': 'np.reshape',
+        'description': 'CORRUPTED: reshape(64,64,256,1024) → (64,64,1024,256)'
+    })
+    
+    print(f"✓ Saved: {emd_filename_garbled}")
+    print(f"  Shape: {data_garbled.shape}")
+    print(f"  Size: {os.path.getsize(emd_filename_garbled) / 1024**2:.1f} MB")
+    
+    # Generate smaller test for quick comparison
+    print("\n3. Small correct dataset (16×16 scan, 256×1024 detector)")
     data_4d_small, energy_axis_small, _ = create_fake_eels_data(
         scan_shape=(16, 16),
         detector_shape=(256, 1024),
         energy_range=(0, 2048)
     )
     
-    emd_filename_small = output_dir / "fake_4d_eels_16x16_256x1024.emd"
+    emd_filename_small = output_dir / "eels_correct_16x16_256x1024.emd"
     save_as_emd(data_4d_small, emd_filename_small, energy_axis_small, {
         'scan_size': (16, 16),
         'detector_size': (256, 1024),
@@ -205,32 +231,13 @@ def main():
     print(f"  Shape: {data_4d_small.shape}")
     print(f"  Size: {os.path.getsize(emd_filename_small) / 1024**2:.1f} MB")
     
-    # Generate opposite orientation for testing transpose logic
-    print("\n3. Transposed detector dataset (64×64 scan, 1024×256 detector)")
-    data_4d_transposed, energy_axis_t, _ = create_fake_eels_data(
-        scan_shape=(64, 64),
-        detector_shape=(1024, 256),
-        energy_range=(0, 2048)
-    )
-    
-    emd_filename_t = output_dir / "fake_4d_eels_64x64_1024x256.emd"
-    save_as_emd(data_4d_transposed, emd_filename_t, energy_axis_t, {
-        'scan_size': (64, 64),
-        'detector_size': (1024, 256),
-        'peaks': str(peaks)
-    })
-    
-    print(f"✓ Saved: {emd_filename_t}")
-    print(f"  Shape: {data_4d_transposed.shape}")
-    print(f"  Size: {os.path.getsize(emd_filename_t) / 1024**2:.1f} MB")
-    
     print(f"\n=== Test datasets created in {output_dir}/ ===")
-    print("\nThese datasets contain:")
-    print("- Zero loss peak at 0 eV")
-    print("- Plasmon peak at 20 eV") 
-    print("- Carbon K-edge at 285 eV")
-    print("- Spatial variations in thickness and composition")
-    print("- Realistic noise and background")
+    print("\nComparison test plan:")
+    print("1. Load eels_correct_64x64_256x1024.emd - should show proper EELS spectra")
+    print("2. Load eels_GARBLED_64x64_1024x256.emd - should show scrambled garbage")
+    print("\nBoth contain identical original data, but the GARBLED version has been")
+    print("corrupted by np.reshape() which scrambles the detector pixel layout.")
+    print("The GARBLED version will trigger dy > dx detection and wrong auto-summing.")
 
 if __name__ == "__main__":
     main()
