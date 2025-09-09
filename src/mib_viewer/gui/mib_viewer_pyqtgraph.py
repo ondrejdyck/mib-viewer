@@ -960,9 +960,24 @@ class MibViewerPyQtGraph(QMainWindow):
             self.log_message(f"Detected experiment type: {experiment_type} - {exp_info['detector_type']}")
             
             if experiment_type == "EELS":
-                # Flip the energy axis for EELS data and store
-                # After transpose, energy axis is now the last dimension (index 3) for EELS
-                self.eels_data = raw_data[:, :, :, ::-1]
+                # Check if we need to sum along the shorter detector dimension
+                sy, sx, dy, dx = raw_data.shape
+                
+                # For EELS data (dy != dx), check if we need to sum
+                if min(dy, dx) > 1:  # 4D EELS - both detector dimensions > 1
+                    if dy < dx:
+                        # dy is shorter, sum along Y detector dimension (axis=2)
+                        self.log_message(f"Auto-summing Y detector dimension: {dy}×{dx} → 1×{dx}")
+                        summed_data = np.sum(raw_data, axis=2, keepdims=True)
+                    else:
+                        # dx is shorter, sum along X detector dimension (axis=3)
+                        self.log_message(f"Auto-summing X detector dimension: {dy}×{dx} → {dy}×1")
+                        summed_data = np.sum(raw_data, axis=3, keepdims=True)
+                    # Flip energy axis (the longer dimension becomes the energy axis)
+                    self.eels_data = summed_data[:, :, :, ::-1]
+                else:
+                    # 3D EELS - already summed, just flip energy axis
+                    self.eels_data = raw_data[:, :, :, ::-1]
                 
                 self.eels_filename = os.path.basename(filename)
                 self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type})")

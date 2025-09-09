@@ -348,7 +348,7 @@ def apply_data_processing(data_4d, processing_options):
     
     # Apply Y-summing second (if requested)
     if processing_options.get('sum_y', False):
-        data_4d = np.sum(data_4d, axis=3, keepdims=True)
+        data_4d = np.sum(data_4d, axis=2, keepdims=True)
         print(f"Applied Y-summing: {data_4d.shape}")
     
     return data_4d
@@ -417,7 +417,7 @@ def calculate_processed_size(original_shape, processing_options):
     
     # Apply Y-summing
     if processing_options.get('sum_y', False):
-        qx = 1  # Y dimension becomes 1
+        qy = 1  # Y dimension becomes 1
     
     new_shape = (sy, sx, qy, qx)
     
