@@ -281,6 +281,10 @@ class MibViewerPyQtGraph(QMainWindow):
         self.stem4d_tab = self.create_4d_stem_tab()
         self.tab_widget.addTab(self.stem4d_tab, "4D STEM")
         
+        # Create 4D FFT Explorer tab
+        self.fft4d_tab = self.create_4d_fft_tab()
+        self.tab_widget.addTab(self.fft4d_tab, "4D FFT Explorer")
+        
         # Create MIB to EMD conversion tab
         self.conversion_tab = self.create_conversion_tab()
         self.tab_widget.addTab(self.conversion_tab, "MIB → EMD")
@@ -502,6 +506,124 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Set proportions - scan/diffraction get most space, virtual imaging medium, controls minimal
         main_splitter.setSizes([800, 600, 200])
+        
+        return main_splitter
+    
+    def create_4d_fft_tab(self):
+        """Create the 4D FFT Explorer tab"""
+        # Create main horizontal splitter
+        main_splitter = QSplitter(Qt.Horizontal)
+        
+        # Create plots panel (2x2 grid of displays)
+        plots_panel = QWidget()
+        plots_layout = QGridLayout(plots_panel)
+        plots_layout.setContentsMargins(5, 5, 5, 5)
+        plots_layout.setSpacing(5)
+        
+        # Average FFT Overview (top-left)
+        overview_group = QGroupBox("Average FFT Overview")
+        overview_layout = QVBoxLayout(overview_group)
+        self.fft_overview_plot = pg.PlotWidget()
+        self.fft_overview_plot.setAspectLocked(True)
+        self.fft_overview_plot.setLabel('left', 'Spatial Frequency Y')
+        self.fft_overview_plot.setLabel('bottom', 'Spatial Frequency X')
+        overview_layout.addWidget(self.fft_overview_plot)
+        plots_layout.addWidget(overview_group, 0, 0)
+        
+        # FFT Sub-selection (top-right)
+        subselect_group = QGroupBox("FFT Sub-selection")
+        subselect_layout = QVBoxLayout(subselect_group)
+        self.fft_subselect_plot = pg.PlotWidget()
+        self.fft_subselect_plot.setAspectLocked(True)
+        self.fft_subselect_plot.setLabel('left', 'Spatial Frequency Y')
+        self.fft_subselect_plot.setLabel('bottom', 'Spatial Frequency X')
+        subselect_layout.addWidget(self.fft_subselect_plot)
+        plots_layout.addWidget(subselect_group, 0, 1)
+        
+        # Amplitude Display (bottom-left)
+        amp_group = QGroupBox("FFT Amplitude")
+        amp_layout = QVBoxLayout(amp_group)
+        self.fft_amp_plot = pg.PlotWidget()
+        self.fft_amp_plot.setAspectLocked(True)
+        self.fft_amp_plot.setLabel('left', 'Q_y (pixels)')
+        self.fft_amp_plot.setLabel('bottom', 'Q_x (pixels)')
+        amp_layout.addWidget(self.fft_amp_plot)
+        plots_layout.addWidget(amp_group, 1, 0)
+        
+        # Phase Display (bottom-right)
+        phase_group = QGroupBox("FFT Phase")
+        phase_layout = QVBoxLayout(phase_group)
+        self.fft_phase_plot = pg.PlotWidget()
+        self.fft_phase_plot.setAspectLocked(True)
+        self.fft_phase_plot.setLabel('left', 'Q_y (pixels)')
+        self.fft_phase_plot.setLabel('bottom', 'Q_x (pixels)')
+        phase_layout.addWidget(self.fft_phase_plot)
+        plots_layout.addWidget(phase_group, 1, 1)
+        
+        main_splitter.addWidget(plots_panel)
+        
+        # Create controls panel
+        controls_panel = QWidget()
+        controls_panel.setMinimumWidth(200)
+        controls_panel.setMaximumWidth(250)
+        controls_layout = QVBoxLayout(controls_panel)
+        
+        # FFT Controls group
+        fft_controls_group = QGroupBox("FFT Controls")
+        fft_controls_layout = QVBoxLayout(fft_controls_group)
+        
+        # Estimate FFT size button
+        self.estimate_fft_btn = QPushButton("Estimate FFT Size")
+        self.estimate_fft_btn.clicked.connect(self.estimate_fft_size)
+        self.estimate_fft_btn.setToolTip("Detect bright field disk and estimate memory requirements")
+        self.estimate_fft_btn.setEnabled(False)  # Initially disabled until data is loaded
+        fft_controls_layout.addWidget(self.estimate_fft_btn)
+        
+        # Compute FFT button (initially disabled)
+        self.compute_fft_btn = QPushButton("Compute Spatial FFT")
+        self.compute_fft_btn.clicked.connect(self.compute_4d_fft)
+        self.compute_fft_btn.setToolTip("Compute spatial frequency FFT (FFT across scan dimensions)")
+        self.compute_fft_btn.setEnabled(False)  # Disabled until estimation is done
+        fft_controls_layout.addWidget(self.compute_fft_btn)
+        
+        # FFT size and memory info label
+        self.fft_memory_label = QLabel("Load 4D STEM data first")
+        self.fft_memory_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.fft_memory_label.setWordWrap(True)
+        fft_controls_layout.addWidget(self.fft_memory_label)
+        
+        # Selection mode toggle
+        self.fft_scan_roi_checkbox = QCheckBox("FFT ROI Mode")
+        self.fft_scan_roi_checkbox.setChecked(False)
+        self.fft_scan_roi_checkbox.setToolTip("Toggle between point selector and ROI for spatial frequency selection")
+        self.fft_scan_roi_checkbox.toggled.connect(self.on_fft_scan_roi_toggle)
+        fft_controls_layout.addWidget(self.fft_scan_roi_checkbox)
+        
+        self.fft_freq_roi_checkbox = QCheckBox("Ronchi ROI Mode")
+        self.fft_freq_roi_checkbox.setChecked(False)
+        self.fft_freq_roi_checkbox.setToolTip("Toggle between point selector and ROI for detector/Ronchi selection")
+        self.fft_freq_roi_checkbox.toggled.connect(self.on_fft_freq_roi_toggle)
+        fft_controls_layout.addWidget(self.fft_freq_roi_checkbox)
+        
+        fft_controls_layout.addStretch()
+        controls_layout.addWidget(fft_controls_group)
+        
+        # Info panel
+        info_group = QGroupBox("Info")
+        info_layout = QVBoxLayout(info_group)
+        
+        self.fft_info_label = QLabel("Load 4D STEM data first,\nthen click 'Compute 4D FFT'")
+        self.fft_info_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.fft_info_label.setWordWrap(True)
+        info_layout.addWidget(self.fft_info_label)
+        
+        controls_layout.addWidget(info_group)
+        controls_layout.addStretch()
+        
+        main_splitter.addWidget(controls_panel)
+        
+        # Set proportions - plots get most space, controls minimal
+        main_splitter.setSizes([1400, 200])
         
         return main_splitter
     
@@ -822,10 +944,71 @@ class MibViewerPyQtGraph(QMainWindow):
         self.df_image_item = pg.ImageItem()
         self.df_plot.addItem(self.df_image_item)
         
+        # 4D FFT Explorer tab items
+        self.fft_overview_item = pg.ImageItem()
+        self.fft_overview_plot.addItem(self.fft_overview_item)
+        
+        self.fft_amp_item = pg.ImageItem()
+        self.fft_amp_plot.addItem(self.fft_amp_item)
+        
+        self.fft_phase_item = pg.ImageItem()
+        self.fft_phase_plot.addItem(self.fft_phase_item)
+        
+        self.fft_subselect_item = pg.ImageItem()
+        self.fft_subselect_plot.addItem(self.fft_subselect_item)
+        
+        # FFT data storage
+        self.fft4d_data = None
+        self.fft4d_computed = False
+        self.fft_on_the_fly = False
+        self.fft_crop_info = None
+        
+        # On-the-fly FFT cache and management
+        self.fft_cache = {}  # Cache individual scan position FFTs: {(sy, sx): fft_2d}
+        self.fft_update_timer = QTimer()
+        self.fft_update_timer.setSingleShot(True)
+        self.fft_update_timer.timeout.connect(self.delayed_fft_update)
+        
+        # Progressive average computation
+        self.average_fft_accumulator = None
+        self.average_fft_count = 0
+        self.average_fft_complete = False
+        
         # Cursor for scan position selection
         self.scan_cursor = pg.CircleROI([0, 0], [5, 5], pen='r', removable=False)
         self.scan_cursor.sigRegionChanged.connect(self.on_scan_position_changed)
         self.scan_plot.addItem(self.scan_cursor)
+        
+        # FFT scan position selectors (linked between overview and sub-selection)
+        # FFT scan selectors (start in point mode with CrosshairROI)
+        self.fft_scan_selector_overview = pg.CrosshairROI([0, 0], size=10, pen='r')
+        self.fft_scan_selector_overview.sigRegionChanged.connect(lambda: self.on_fft_scan_changed(source='overview'))
+        
+        self.fft_scan_selector_subselect = pg.CrosshairROI([0, 0], size=10, pen='r')
+        self.fft_scan_selector_subselect.sigRegionChanged.connect(lambda: self.on_fft_scan_changed(source='subselect'))
+        
+        # FFT frequency selectors (start in point mode with CrosshairROI)
+        self.fft_freq_selector_amp = pg.CrosshairROI([0, 0], size=10, pen='g')
+        self.fft_freq_selector_amp.sigRegionChanged.connect(lambda: self.on_fft_freq_changed(source='amp'))
+        
+        self.fft_freq_selector_phase = pg.CrosshairROI([0, 0], size=10, pen='g')
+        self.fft_freq_selector_phase.sigRegionChanged.connect(lambda: self.on_fft_freq_changed(source='phase'))
+        
+        # Initially hide FFT selectors (will be shown when FFT is computed)
+        self.fft_scan_selector_overview.setVisible(False)
+        self.fft_scan_selector_subselect.setVisible(False)
+        self.fft_freq_selector_amp.setVisible(False)
+        self.fft_freq_selector_phase.setVisible(False)
+        
+        # Add selectors to plots
+        self.fft_overview_plot.addItem(self.fft_scan_selector_overview)
+        self.fft_subselect_plot.addItem(self.fft_scan_selector_subselect)
+        self.fft_amp_plot.addItem(self.fft_freq_selector_amp)
+        self.fft_phase_plot.addItem(self.fft_freq_selector_phase)
+        
+        # FFT selection states
+        self.fft_scan_roi_mode = False
+        self.fft_freq_roi_mode = False
         
         # Virtual detector overlays on diffraction pattern
         # Add DF detectors first (bottom layers) so BF detector can be clicked when overlapping
@@ -892,9 +1075,9 @@ class MibViewerPyQtGraph(QMainWindow):
             self.eels_roi.sigRegionChanged.connect(lambda: self.on_roi_changed(source='eels'))
             self.ndata_roi.sigRegionChanged.connect(lambda: self.on_roi_changed(source='ndata'))
         else:
-            # Crosshair cursors
-            self.eels_roi = pg.CrosshairROI([0, 0], size=1, pen='r')
-            self.ndata_roi = pg.CrosshairROI([0, 0], size=1, pen='r')
+            # Crosshair cursors (bigger for easier mouse interaction)
+            self.eels_roi = pg.CrosshairROI([0, 0], size=10, pen='r')
+            self.ndata_roi = pg.CrosshairROI([0, 0], size=10, pen='r')
             
             self.eels_roi.sigRegionChanged.connect(lambda: self.on_crosshair_changed(source='eels'))
             self.ndata_roi.sigRegionChanged.connect(lambda: self.on_crosshair_changed(source='ndata'))
@@ -1008,6 +1191,9 @@ class MibViewerPyQtGraph(QMainWindow):
             elif experiment_type == "4D_STEM":
                 # Store as 4D STEM data (no energy axis flip needed)
                 self.stem4d_data = raw_data
+                
+                # Update FFT memory estimate
+                self.update_fft_memory_estimate()
                 
                 # TODO: Add 4D STEM file label to the 4D STEM tab
                 self.log_message(f"Loaded 4D STEM data: {os.path.basename(filename)} ({file_type})")
@@ -2526,6 +2712,9 @@ class MibViewerPyQtGraph(QMainWindow):
                     # Store as 4D STEM data (no energy axis flip needed)
                     self.stem4d_data = raw_data
                     
+                    # Update FFT memory estimate
+                    self.update_fft_memory_estimate()
+                    
                     # Log 4D STEM file loading
                     self.log_message(f"Opened converted 4D STEM data: {os.path.basename(self.last_converted_file)} (EMD)")
                     
@@ -2666,6 +2855,1026 @@ class MibViewerPyQtGraph(QMainWindow):
             processing_options['bin_method'] = self.bin_method_combo.currentText().lower()
         
         return processing_options
+    
+    # ============================================================================
+    # 4D FFT Explorer Methods
+    # ============================================================================
+    
+    def compute_4d_fft(self):
+        """Compute 4D FFT of the loaded STEM data"""
+        if self.stem4d_data is None:
+            QMessageBox.warning(self, "No Data", "Please load 4D STEM data first.")
+            return
+        
+        # Memory estimation should have been done via estimate button
+        if self.fft_crop_info is None:
+            QMessageBox.warning(self, "No Size Estimation", 
+                              "Please click 'Estimate FFT Size' first to detect bright field disk and check memory requirements.")
+            return
+        
+        # Show progress and disable button
+        self.compute_fft_btn.setEnabled(False)
+        self.compute_fft_btn.setText("Computing...")
+        QApplication.processEvents()
+        
+        try:
+            # Note: On-the-fly mode disabled for axes=(0,1) FFT  
+            # Always compute full FFT with bright field disk detection
+            self.fft_info_label.setText("Detecting bright field disk...\nAnalyzing diffraction pattern.")
+            QApplication.processEvents()
+            
+            import numpy as np
+            
+            # Use pre-computed crop info from estimation step
+            crop_info = self.fft_crop_info
+            
+            # Step 1: Crop 4D dataset to focus on bright field region
+            self.fft_info_label.setText("Cropping dataset to bright field region...\nThis reduces computation significantly.")
+            QApplication.processEvents()
+            
+            cropped_4d_data = self.crop_to_bright_field(crop_info)
+            
+            # Step 2: Compute spatial frequency FFT on cropped data
+            self.fft_info_label.setText("Computing spatial frequency FFT...\nFaster thanks to cropping!")
+            QApplication.processEvents()
+            
+            self.fft4d_data = np.fft.fftshift(np.fft.fftn(cropped_4d_data, axes=(0, 1)), axes=(0, 1))
+            self.fft4d_computed = True
+            
+            # Store crop info for display purposes
+            self.fft_crop_info = crop_info
+            
+            # Update displays
+            self.setup_fft_displays()
+            self.update_fft_displays()
+            
+            # Show selectors
+            self.fft_scan_selector_overview.setVisible(True)
+            self.fft_scan_selector_subselect.setVisible(True)
+            self.fft_freq_selector_amp.setVisible(True)
+            self.fft_freq_selector_phase.setVisible(True)
+            
+            # Calculate data reduction benefit
+            original_size = crop_info['original_shape'][0] * crop_info['original_shape'][1]
+            cropped_size = crop_info['size'][0] * crop_info['size'][1]
+            reduction_factor = original_size / cropped_size
+            
+            self.fft_info_label.setText(f"Spatial frequency FFT computed!\n"
+                                      f"Bright field cropping: {reduction_factor:.1f}× faster\n"
+                                      f"Use selectors to explore.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to compute 4D FFT:\n{str(e)}")
+            self.fft_info_label.setText(f"FFT computation failed:\n{str(e)}")
+        
+        finally:
+            self.compute_fft_btn.setEnabled(True)
+            self.compute_fft_btn.setText("Compute Spatial FFT")
+    
+    def estimate_fft_size(self):
+        """Estimate FFT size by detecting bright field disk and calculating memory requirements"""
+        if self.stem4d_data is None:
+            QMessageBox.warning(self, "No Data", "Please load 4D STEM data first.")
+            return
+        
+        # Disable button during estimation
+        self.estimate_fft_btn.setEnabled(False)
+        self.estimate_fft_btn.setText("Detecting...")
+        self.fft_memory_label.setText("Detecting bright field disk...")
+        QApplication.processEvents()
+        
+        try:
+            import psutil
+            
+            # Detect bright field disk
+            crop_info = self.detect_bright_field_disk()
+            if crop_info is None:
+                self.fft_memory_label.setText("ERROR: Could not detect bright field disk.\nTry adjusting threshold or check data quality.")
+                self.compute_fft_btn.setEnabled(False)
+                return
+            
+            # Store crop info for later use
+            self.fft_crop_info = crop_info
+            
+            # Show preview of detection
+            self.show_bright_field_detection_preview(crop_info)
+            
+            # Calculate memory requirements for cropped FFT
+            sy, sx = self.stem4d_data.shape[:2]
+            crop_height, crop_width = crop_info['size']
+            
+            # Complex128 FFT data: 16 bytes per element
+            fft_bytes = sy * sx * crop_height * crop_width * 16
+            fft_gb = fft_bytes / (1024**3)
+            
+            # Get current memory usage
+            memory = psutil.virtual_memory()
+            available_gb = memory.available / (1024**3)
+            
+            # Calculate data reduction
+            original_qy, original_qx = crop_info['original_shape']
+            original_bytes = sy * sx * original_qy * original_qx * 16
+            original_gb = original_bytes / (1024**3)
+            reduction_factor = original_gb / fft_gb
+            
+            # Update display
+            self.fft_memory_label.setText(
+                f"Bright field disk detected successfully!\n"
+                f"• Crop region: {crop_height} × {crop_width} pixels\n"
+                f"• Original would need: {original_gb:.2f} GB\n"
+                f"• Cropped FFT needs: {fft_gb:.2f} GB\n"
+                f"• Data reduction: {reduction_factor:.1f}× smaller\n"
+                f"• Available memory: {available_gb:.1f} GB\n"
+                f"• Status: {'✓ READY' if fft_gb < available_gb * 0.8 else '⚠ TIGHT - may be slow'}"
+            )
+            
+            # Enable compute button if memory looks good
+            if fft_gb < available_gb * 0.9:  # Leave 10% buffer
+                self.compute_fft_btn.setEnabled(True)
+                self.compute_fft_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }")
+            else:
+                # Still allow but warn user
+                reply = QMessageBox.question(self, "High Memory Usage", 
+                                           f"FFT will use {fft_gb:.1f} GB of {available_gb:.1f} GB available.\n"
+                                           f"This may be slow or cause system issues.\n\n"
+                                           f"Continue anyway?",
+                                           QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    self.compute_fft_btn.setEnabled(True)
+                    self.compute_fft_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }")
+                else:
+                    self.compute_fft_btn.setEnabled(False)
+            
+        except Exception as e:
+            self.fft_memory_label.setText(f"ERROR during estimation:\n{str(e)}")
+            self.compute_fft_btn.setEnabled(False)
+            print(f"Error in FFT size estimation: {e}")
+            
+        finally:
+            self.estimate_fft_btn.setEnabled(True)
+            self.estimate_fft_btn.setText("Re-estimate FFT Size")
+    
+    def check_fft_memory(self):
+        """Check if there's enough memory for 4D FFT computation"""
+        import psutil
+        
+        # Get current memory usage
+        memory = psutil.virtual_memory()
+        available_gb = memory.available / (1024**3)
+        
+        # Estimate FFT memory requirement (complex128 = 16 bytes per element)
+        shape = self.stem4d_data.shape
+        fft_gb = (shape[0] * shape[1] * shape[2] * shape[3] * 16) / (1024**3)
+        
+        # Update memory label
+        self.fft_memory_label.setText(f"FFT needs: {fft_gb:.1f} GB\nAvailable: {available_gb:.1f} GB")
+        
+        if fft_gb > available_gb * 0.8:  # Leave 20% buffer
+            # Offer on-the-fly computation instead
+            reply = QMessageBox.question(self, "Large Dataset", 
+                                       f"4D FFT requires ~{fft_gb:.1f} GB memory.\n"
+                                       f"Only {available_gb:.1f} GB available.\n\n"
+                                       f"Use on-the-fly computation instead?\n"
+                                       f"(Slower but uses less memory)",
+                                       QMessageBox.Yes | QMessageBox.No)
+            
+            if reply == QMessageBox.Yes:
+                # For axes=(0,1) FFT, true on-the-fly is not feasible
+                # Instead, suggest dataset reduction approaches
+                reduction_reply = QMessageBox.question(self, "Dataset Reduction", 
+                                                     f"For spatial frequency FFT (axes=0,1), we need all scan positions.\n"
+                                                     f"On-the-fly computation is not possible.\n\n"
+                                                     f"Suggestions:\n"
+                                                     f"1. Crop scan area to reduce size\n"
+                                                     f"2. Downsample (bin) the scan dimensions\n"
+                                                     f"3. Use a different analysis approach\n\n"
+                                                     f"Continue with full computation anyway?\n"
+                                                     f"(May cause system to run out of memory)",
+                                                     QMessageBox.Yes | QMessageBox.No)
+                
+                if reduction_reply == QMessageBox.Yes:
+                    # User wants to try anyway
+                    return True
+                else:
+                    self.compute_fft_btn.setEnabled(False)
+                    return False
+            else:
+                self.compute_fft_btn.setEnabled(False)
+                return False
+        
+        self.compute_fft_btn.setEnabled(True)
+        return True
+    
+    def setup_fft_displays(self):
+        """Setup initial FFT display states"""
+        if not self.fft4d_computed:
+            return
+        
+        # Set initial positions for selectors
+        sy, sx, qy, qx = self.fft4d_data.shape
+        
+        # Center scan selectors
+        scan_center_x, scan_center_y = sx // 2, sy // 2
+        self.fft_scan_selector_overview.setPos([scan_center_x - 2.5, scan_center_y - 2.5])
+        self.fft_scan_selector_subselect.setPos([scan_center_x - 2.5, scan_center_y - 2.5])
+        
+        # Center frequency selectors
+        freq_center_x, freq_center_y = qx // 2, qy // 2
+        self.fft_freq_selector_amp.setPos([freq_center_x - 5, freq_center_y - 5])
+        self.fft_freq_selector_phase.setPos([freq_center_x - 5, freq_center_y - 5])
+        
+        # Apply colormap (hardcode seismic for phase)
+        try:
+            # Create custom seismic colormap for phase
+            seismic_colors = [[0, 0, 255, 255], [255, 255, 255, 255], [255, 0, 0, 255]]  # Blue-White-Red
+            seismic_colormap = pg.ColorMap([0.0, 0.5, 1.0], seismic_colors)
+            self.fft_phase_item.setColorMap(seismic_colormap)
+        except:
+            # Fallback to default
+            pass
+    
+    def update_fft_displays(self):
+        """Update all FFT displays"""
+        if not self.fft4d_computed:
+            return
+        
+        # On-the-fly mode disabled for axes=(0,1) FFT
+        
+        # Full computation mode - use fft4d_data
+        if self.fft4d_data is None:
+            return
+        
+        # Update FFT overview - spatial frequency map at detector center
+        # This shows how spatial frequencies vary at the center of the bright field disk
+        sy, sx, qy, qx = self.fft4d_data.shape
+        detector_center_y, detector_center_x = qy // 2, qx // 2
+        spatial_freq_map = self.fft4d_data[:, :, detector_center_y, detector_center_x]
+        overview_data = np.log(np.abs(spatial_freq_map) + 1e-10)  # Log scale with small epsilon
+        self.fft_overview_item.setImage(overview_data.T)
+        
+        # Update amplitude and phase at current spatial frequency
+        spatial_freq_region = self.get_fft_scan_region()  # Get region or point
+        if spatial_freq_region is not None:
+            if self.fft_scan_roi_mode:
+                # ROI mode - average over selected spatial frequency region
+                ky1, kx1, ky2, kx2 = spatial_freq_region
+                fft_region = self.fft4d_data[ky1:ky2, kx1:kx2, :, :]
+                
+                # Average over spatial frequency region for amplitude and phase
+                avg_fft_slice = np.mean(fft_region, axis=(0, 1))
+                
+                # Update amplitude display
+                amp_data = np.abs(avg_fft_slice)
+                self.fft_amp_item.setImage(amp_data.T)
+                
+                # Update phase display
+                phase_data = np.angle(avg_fft_slice)
+                self.fft_phase_item.setImage(phase_data.T)
+            else:
+                # Point mode - single spatial frequency
+                ky, kx = spatial_freq_region
+                ky = max(0, min(ky, self.fft4d_data.shape[0] - 1))
+                kx = max(0, min(kx, self.fft4d_data.shape[1] - 1))
+                
+                # Get diffraction pattern at this spatial frequency
+                fft_slice = self.fft4d_data[ky, kx, :, :]
+                
+                # Update amplitude display  
+                amp_data = np.abs(fft_slice)
+                self.fft_amp_item.setImage(amp_data.T)
+                
+                # Update phase display
+                phase_data = np.angle(fft_slice)
+                self.fft_phase_item.setImage(phase_data.T)
+        
+        # Update sub-selection display
+        self.update_fft_subselection()
+    
+    def update_fft_subselection(self):
+        """Update FFT sub-selection display based on frequency selector"""
+        if not self.fft4d_computed:
+            return
+        
+        # On-the-fly mode disabled for axes=(0,1) FFT
+        
+        # Full computation mode - use fft4d_data
+        if self.fft4d_data is None:
+            return
+        
+        # Get frequency selection region
+        freq_region = self.get_fft_freq_region()
+        if freq_region is None:
+            return
+        
+        freq_y1, freq_x1, freq_y2, freq_x2 = freq_region
+        
+        # Extract sub-region from diffraction patterns and show variation across spatial frequencies
+        if self.fft_freq_roi_mode:
+            # ROI mode - average over selected detector region
+            sub_fft = self.fft4d_data[:, :, freq_y1:freq_y2, freq_x1:freq_x2]
+            # Average across detector region, show spatial frequency map
+            spatial_freq_map = np.mean(np.abs(sub_fft), axis=(2, 3))
+        else:
+            # Point mode - single detector pixel across all spatial frequencies
+            spatial_freq_map = np.abs(self.fft4d_data[:, :, freq_y1, freq_x1])
+        
+        # Apply log scaling for better visibility (consistent with overview)
+        log_spatial_freq_map = np.log(spatial_freq_map + 1e-10)
+        self.fft_subselect_item.setImage(log_spatial_freq_map.T)
+    
+    def get_fft_scan_position(self):
+        """Get current scan position from selector (center point only)"""
+        pos = self.fft_scan_selector_overview.pos()
+        size = self.fft_scan_selector_overview.size()
+        center_x = int(pos[0] + size[0] / 2)
+        center_y = int(pos[1] + size[1] / 2)
+        return (center_y, center_x)
+    
+    def get_fft_scan_region(self):
+        """Get current spatial frequency region - returns point or region based on mode"""
+        pos = self.fft_scan_selector_overview.pos()
+        size = self.fft_scan_selector_overview.size()
+        
+        sy, sx = self.fft4d_data.shape[:2]
+        
+        if self.fft_scan_roi_mode:
+            # ROI mode - return region bounds
+            x1, y1 = int(pos[0]), int(pos[1])
+            x2, y2 = int(pos[0] + size[0]), int(pos[1] + size[1])
+            
+            # Ensure bounds are valid
+            x1, x2 = max(0, x1), min(sx, x2)
+            y1, y2 = max(0, y1), min(sy, y2)
+            
+            return (y1, x1, y2, x2)
+        else:
+            # Point mode - return center point
+            center_x = int(pos[0] + size[0] / 2)
+            center_y = int(pos[1] + size[1] / 2)
+            
+            # Ensure bounds are valid
+            center_x = max(0, min(center_x, sx - 1))
+            center_y = max(0, min(center_y, sy - 1))
+            
+            return (center_y, center_x)
+    
+    def get_fft_freq_region(self):
+        """Get current frequency region from selector"""
+        pos = self.fft_freq_selector_amp.pos()
+        size = self.fft_freq_selector_amp.size()
+        
+        # Get detector dimensions - use stem4d_data if fft4d_data not available (on-the-fly mode)
+        if self.fft4d_data is not None:
+            qy, qx = self.fft4d_data.shape[2], self.fft4d_data.shape[3]
+        elif self.stem4d_data is not None:
+            qy, qx = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
+        else:
+            return None
+        
+        if self.fft_freq_roi_mode:
+            # ROI mode - return region
+            x1, y1 = int(pos[0]), int(pos[1])
+            x2, y2 = int(pos[0] + size[0]), int(pos[1] + size[1])
+            
+            # Ensure bounds are valid
+            x1, x2 = max(0, x1), min(qx, x2)
+            y1, y2 = max(0, y1), min(qy, y2)
+            
+            return (y1, x1, y2, x2)
+        else:
+            # Point mode - return single point
+            center_x = int(pos[0] + size[0] / 2)
+            center_y = int(pos[1] + size[1] / 2)
+            
+            # Ensure bounds are valid
+            center_x = max(0, min(center_x, qx - 1))
+            center_y = max(0, min(center_y, qy - 1))
+            
+            return (center_y, center_x, center_y + 1, center_x + 1)
+    
+    def on_fft_scan_changed(self, source='overview'):
+        """Handle scan position selector changes with linking"""
+        selector = self.fft_scan_selector_overview if source == 'overview' else self.fft_scan_selector_subselect
+        other_selector = self.fft_scan_selector_subselect if source == 'overview' else self.fft_scan_selector_overview
+        
+        # Sync positions
+        pos = selector.pos()
+        size = selector.size()
+        
+        other_selector.blockSignals(True)
+        other_selector.setPos(pos)
+        other_selector.setSize(size)
+        other_selector.blockSignals(False)
+        
+        # Update displays immediately (on-the-fly disabled for axes=(0,1) FFT)
+        self.update_fft_displays()
+    
+    def on_fft_freq_changed(self, source='amp'):
+        """Handle frequency selector changes with linking"""
+        selector = self.fft_freq_selector_amp if source == 'amp' else self.fft_freq_selector_phase
+        other_selector = self.fft_freq_selector_phase if source == 'amp' else self.fft_freq_selector_amp
+        
+        # Sync positions
+        pos = selector.pos()
+        size = selector.size()
+        
+        other_selector.blockSignals(True)
+        other_selector.setPos(pos)
+        other_selector.setSize(size)
+        other_selector.blockSignals(False)
+        
+        # Update sub-selection display immediately (on-the-fly disabled)
+        self.update_fft_subselection()
+    
+    def on_fft_scan_roi_toggle(self, checked):
+        """Toggle between point and ROI mode for scan selection"""
+        self.fft_scan_roi_mode = checked
+        
+        # Get current positions before replacing selectors
+        overview_pos = self.fft_scan_selector_overview.pos()
+        subselect_pos = self.fft_scan_selector_subselect.pos()
+        
+        # Remove old selectors from plots
+        self.fft_overview_plot.removeItem(self.fft_scan_selector_overview)
+        self.fft_subselect_plot.removeItem(self.fft_scan_selector_subselect)
+        
+        if checked:
+            # ROI mode - use CircleROI for area selection
+            self.fft_scan_selector_overview = pg.CircleROI(overview_pos, [25, 25], pen='r', removable=False)
+            self.fft_scan_selector_subselect = pg.CircleROI(subselect_pos, [25, 25], pen='r', removable=False)
+        else:
+            # Point mode - use CrosshairROI for point selection
+            self.fft_scan_selector_overview = pg.CrosshairROI(overview_pos, size=10, pen='r')
+            self.fft_scan_selector_subselect = pg.CrosshairROI(subselect_pos, size=10, pen='r')
+        
+        # Reconnect signals
+        self.fft_scan_selector_overview.sigRegionChanged.connect(lambda: self.on_fft_scan_changed(source='overview'))
+        self.fft_scan_selector_subselect.sigRegionChanged.connect(lambda: self.on_fft_scan_changed(source='subselect'))
+        
+        # Add selectors back to plots
+        self.fft_overview_plot.addItem(self.fft_scan_selector_overview)
+        self.fft_subselect_plot.addItem(self.fft_scan_selector_subselect)
+        
+        # Update displays immediately (on-the-fly disabled for axes=(0,1) FFT)
+        self.update_fft_displays()
+    
+    def on_fft_freq_roi_toggle(self, checked):
+        """Toggle between point and ROI mode for frequency selection"""
+        self.fft_freq_roi_mode = checked
+        
+        # Get current positions before replacing selectors
+        amp_pos = self.fft_freq_selector_amp.pos()
+        phase_pos = self.fft_freq_selector_phase.pos()
+        
+        # Remove old selectors from plots
+        self.fft_amp_plot.removeItem(self.fft_freq_selector_amp)
+        self.fft_phase_plot.removeItem(self.fft_freq_selector_phase)
+        
+        if checked:
+            # ROI mode - use CircleROI for area selection
+            self.fft_freq_selector_amp = pg.CircleROI(amp_pos, [40, 40], pen='g', removable=False)
+            self.fft_freq_selector_phase = pg.CircleROI(phase_pos, [40, 40], pen='g', removable=False)
+        else:
+            # Point mode - use CrosshairROI for point selection
+            self.fft_freq_selector_amp = pg.CrosshairROI(amp_pos, size=10, pen='g')
+            self.fft_freq_selector_phase = pg.CrosshairROI(phase_pos, size=10, pen='g')
+        
+        # Reconnect signals
+        self.fft_freq_selector_amp.sigRegionChanged.connect(lambda: self.on_fft_freq_changed(source='amp'))
+        self.fft_freq_selector_phase.sigRegionChanged.connect(lambda: self.on_fft_freq_changed(source='phase'))
+        
+        # Add selectors back to plots
+        self.fft_amp_plot.addItem(self.fft_freq_selector_amp)
+        self.fft_phase_plot.addItem(self.fft_freq_selector_phase)
+        
+        # Update sub-selection display immediately (on-the-fly disabled)
+        self.update_fft_subselection()
+    
+    def update_fft_memory_estimate(self):
+        """Update UI when 4D STEM data is loaded"""
+        if self.stem4d_data is not None:
+            # Enable estimation button and reset state
+            self.estimate_fft_btn.setEnabled(True)
+            self.fft_memory_label.setText("Click 'Estimate FFT Size' to detect bright field disk\nand check memory requirements")
+            self.compute_fft_btn.setEnabled(False)  # Disabled until estimation
+            self.compute_fft_btn.setStyleSheet("")  # Reset styling
+            self.fft_crop_info = None  # Clear any previous crop info
+        else:
+            self.fft_memory_label.setText("Load 4D STEM data first")
+            self.estimate_fft_btn.setEnabled(False)
+            self.compute_fft_btn.setEnabled(False)
+    
+    # ============================================================================
+    # Bright Field Disk Detection Methods
+    # ============================================================================
+    
+    def detect_bright_field_disk(self, threshold_factor=0.5, padding=10):
+        """
+        Detect bright field disk location and extent in diffraction patterns
+        
+        Parameters:
+        -----------
+        threshold_factor : float
+            Threshold as fraction between min and max (0.5 = 50%)
+        padding : int
+            Extra pixels to add around detected disk
+            
+        Returns:
+        --------
+        dict : Crop information with keys:
+            - 'center': (y, x) center of bright field disk
+            - 'bounds': (y1, y2, x1, x2) crop boundaries
+            - 'size': (height, width) of crop region
+            - 'original_shape': (qy, qx) original detector shape
+        """
+        import numpy as np
+        
+        try:
+            # Use first scan position as reference pattern
+            reference_pattern = self.stem4d_data[0, 0, :, :]
+            qy, qx = reference_pattern.shape
+            
+            # Apply threshold to find bright field disk
+            pattern_min = reference_pattern.min()
+            pattern_max = reference_pattern.max()
+            threshold = pattern_min + threshold_factor * (pattern_max - pattern_min)
+            
+            binary_mask = reference_pattern > threshold
+            
+            # Find pixels above threshold
+            y_coords, x_coords = np.where(binary_mask)
+            
+            if len(y_coords) == 0:
+                print("Warning: No pixels above threshold found")
+                return None
+            
+            # Find center of mass (weighted by intensity)
+            weights = reference_pattern[binary_mask]
+            bf_center_y = int(np.average(y_coords, weights=weights))
+            bf_center_x = int(np.average(x_coords, weights=weights))
+            
+            # Find extent of bright field disk
+            y_min, y_max = y_coords.min(), y_coords.max()
+            x_min, x_max = x_coords.min(), x_coords.max()
+            
+            # Create square bounding box around center
+            y_extent = y_max - y_min
+            x_extent = x_max - x_min
+            max_extent = max(y_extent, x_extent)
+            
+            # Add padding and make it square
+            crop_size = max_extent + 2 * padding
+            half_size = crop_size // 2
+            
+            # Calculate crop boundaries, ensuring they stay within detector bounds
+            y1 = max(0, bf_center_y - half_size)
+            y2 = min(qy, bf_center_y + half_size)
+            x1 = max(0, bf_center_x - half_size) 
+            x2 = min(qx, bf_center_x + half_size)
+            
+            # Adjust to maintain square crop if we hit boundaries
+            actual_height = y2 - y1
+            actual_width = x2 - x1
+            actual_size = min(actual_height, actual_width)
+            
+            # Re-center the crop to maintain square aspect
+            y_center = (y1 + y2) // 2
+            x_center = (x1 + x2) // 2
+            half_actual = actual_size // 2
+            
+            y1 = max(0, y_center - half_actual)
+            y2 = min(qy, y_center + half_actual)
+            x1 = max(0, x_center - half_actual)
+            x2 = min(qx, x_center + half_actual)
+            
+            crop_info = {
+                'center': (bf_center_y, bf_center_x),
+                'bounds': (y1, y2, x1, x2),
+                'size': (y2 - y1, x2 - x1),
+                'original_shape': (qy, qx),
+                'threshold': threshold,
+                'threshold_factor': threshold_factor,
+                'padding': padding
+            }
+            
+            print(f"Bright field disk detected:")
+            print(f"  Center: ({bf_center_y}, {bf_center_x})")
+            print(f"  Crop bounds: y={y1}:{y2}, x={x1}:{x2}")
+            print(f"  Crop size: {y2-y1} x {x2-x1}")
+            print(f"  Original size: {qy} x {qx}")
+            print(f"  Data reduction: {((qy*qx) / ((y2-y1)*(x2-x1))):.1f}x smaller")
+            
+            return crop_info
+            
+        except Exception as e:
+            print(f"Error detecting bright field disk: {e}")
+            return None
+    
+    def crop_to_bright_field(self, crop_info):
+        """
+        Crop 4D dataset to bright field region
+        
+        Parameters:
+        -----------
+        crop_info : dict
+            Crop information from detect_bright_field_disk()
+            
+        Returns:
+        --------
+        ndarray : Cropped 4D data with shape (sy, sx, crop_height, crop_width)
+        """
+        y1, y2, x1, x2 = crop_info['bounds']
+        cropped_data = self.stem4d_data[:, :, y1:y2, x1:x2]
+        
+        print(f"Cropped 4D dataset:")
+        print(f"  Original shape: {self.stem4d_data.shape}")
+        print(f"  Cropped shape: {cropped_data.shape}")
+        
+        return cropped_data
+    
+    def show_bright_field_detection_preview(self, crop_info):
+        """
+        Show preview of bright field disk detection for user verification
+        
+        Parameters:
+        -----------
+        crop_info : dict
+            Crop information from detect_bright_field_disk()
+        """
+        import numpy as np
+        
+        # Create preview window
+        preview_window = QMainWindow()
+        preview_window.setWindowTitle("Bright Field Disk Detection Preview")
+        preview_window.resize(800, 600)
+        
+        # Create central widget with layout
+        central_widget = QWidget()
+        layout = QVBoxLayout(central_widget)
+        
+        # Create plot widget
+        preview_plot = pg.PlotWidget()
+        preview_plot.setLabel('left', 'Detector Y')
+        preview_plot.setLabel('bottom', 'Detector X')
+        preview_plot.setAspectLocked(True)
+        
+        # Show reference diffraction pattern
+        reference_pattern = self.stem4d_data[0, 0, :, :]
+        preview_image = pg.ImageItem()
+        preview_plot.addItem(preview_image)
+        preview_image.setImage(reference_pattern.T)
+        
+        # Overlay detected center and crop region
+        center_y, center_x = crop_info['center']
+        y1, y2, x1, x2 = crop_info['bounds']
+        
+        # Add center marker
+        center_marker = pg.ScatterPlotItem([center_x], [center_y], 
+                                         symbol='+', size=20, pen=pg.mkPen('red', width=3))
+        preview_plot.addItem(center_marker)
+        
+        # Add crop region rectangle
+        crop_rect = pg.RectROI([x1, y1], [x2-x1, y2-y1], pen=pg.mkPen('yellow', width=2))
+        crop_rect.setAcceptedMouseButtons(Qt.NoButton)  # Make it non-interactive
+        preview_plot.addItem(crop_rect)
+        
+        # Add info label
+        info_text = f"""
+Bright Field Disk Detection Results:
+• Center: ({center_y}, {center_x})
+• Crop region: {y2-y1} × {x2-x1} pixels
+• Data reduction: {((crop_info['original_shape'][0] * crop_info['original_shape'][1]) / (crop_info['size'][0] * crop_info['size'][1])):.1f}× smaller
+• Threshold: {crop_info['threshold']:.1f} ({crop_info['threshold_factor']*100:.0f}% of range)
+        """
+        
+        info_label = QLabel(info_text.strip())
+        info_label.setStyleSheet("font-family: monospace; background-color: #f0f0f0; padding: 10px;")
+        
+        # Add to layout
+        layout.addWidget(preview_plot)
+        layout.addWidget(info_label)
+        
+        preview_window.setCentralWidget(central_widget)
+        preview_window.show()
+        
+        # Store reference to prevent garbage collection
+        self.bf_preview_window = preview_window
+    
+    # ============================================================================
+    # On-the-fly FFT Methods (Disabled for axes=(0,1) FFT)
+    # ============================================================================
+    
+    def setup_fft_displays_on_the_fly(self):
+        """Setup initial FFT displays for on-the-fly mode"""
+        import numpy as np
+        
+        # Get data shape for selector setup
+        sy, sx, qy, qx = self.stem4d_data.shape
+        
+        # Set initial positions for selectors
+        scan_center_x, scan_center_y = sx // 2, sy // 2
+        self.fft_scan_selector_overview.setPos([scan_center_x - 2.5, scan_center_y - 2.5])
+        self.fft_scan_selector_subselect.setPos([scan_center_x - 2.5, scan_center_y - 2.5])
+        
+        # Center frequency selectors
+        freq_center_x, freq_center_y = qx // 2, qy // 2
+        self.fft_freq_selector_amp.setPos([freq_center_x - 5, freq_center_y - 5])
+        self.fft_freq_selector_phase.setPos([freq_center_x - 5, freq_center_y - 5])
+        
+        # Apply colormap (hardcode seismic for phase)
+        try:
+            # Create custom seismic colormap for phase
+            seismic_colors = [[0, 0, 255, 255], [255, 255, 255, 255], [255, 0, 0, 255]]  # Blue-White-Red
+            seismic_colormap = pg.ColorMap([0.0, 0.5, 1.0], seismic_colors)
+            self.fft_phase_item.setColorMap(seismic_colormap)
+        except:
+            # Fallback to default
+            pass
+        
+        # Initialize displays with placeholder data
+        placeholder = np.zeros((qy, qx))
+        self.fft_overview_item.setImage(placeholder.T)
+        self.fft_amp_item.setImage(placeholder.T)
+        self.fft_phase_item.setImage(placeholder.T)
+        self.fft_subselect_item.setImage(np.zeros((sy, sx)).T)
+        
+        # Trigger initial update
+        self.delayed_fft_update()
+    
+    def compute_single_spatial_freq(self, ky, kx):
+        """Compute diffraction pattern for a single spatial frequency and cache result"""
+        import numpy as np
+        
+        # Check if already cached
+        cache_key = (ky, kx)
+        if cache_key in self.fft_cache:
+            return self.fft_cache[cache_key]
+        
+        try:
+            # For on-the-fly mode, we need to compute a slice of the full 4D FFT
+            # This requires FFT across scan dimensions for the selected spatial frequency
+            # Since we can't efficiently compute just one spatial frequency slice,
+            # we'll compute a small region around the requested frequency
+            
+            # Get data shape
+            sy, sx, qy, qx = self.stem4d_data.shape
+            
+            # Compute full FFT across scan dimensions (this is expensive but necessary)
+            # In practice, for large datasets, we might need a different approach
+            full_fft = np.fft.fftshift(np.fft.fftn(self.stem4d_data, axes=(0, 1)), axes=(0, 1))
+            
+            # Extract the requested spatial frequency
+            diffraction_pattern = full_fft[ky, kx, :, :]
+            
+            # Cache the result
+            self.fft_cache[cache_key] = diffraction_pattern
+            
+            # Manage cache size - keep only recent 20 patterns to limit memory
+            if len(self.fft_cache) > 20:
+                # Remove oldest entries (simple FIFO)
+                oldest_keys = list(self.fft_cache.keys())[:-15]  # Keep 15, remove 5
+                for old_key in oldest_keys:
+                    del self.fft_cache[old_key]
+            
+            return diffraction_pattern
+            
+        except Exception as e:
+            print(f"Error computing spatial frequency ({ky}, {kx}): {e}")
+            # Return zeros as fallback
+            qy, qx = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
+            return np.zeros((qy, qx), dtype=complex)
+    
+    def compute_dc_component(self):
+        """Compute DC component (average diffraction pattern) efficiently"""
+        import numpy as np
+        
+        # DC component is just the mean across scan positions
+        # This is much more efficient than computing the full FFT
+        dc_component = np.mean(self.stem4d_data, axis=(0, 1))
+        
+        return dc_component
+    
+    def delayed_fft_update(self):
+        """Handle delayed FFT updates for on-the-fly mode"""
+        if not self.fft_on_the_fly or not self.fft4d_computed:
+            return
+        
+        import numpy as np
+        
+        try:
+            # Update average FFT overview using progressive sampling
+            avg_fft_mag = self.compute_progressive_average_fft(sample_positions=50)
+            self.fft_overview_item.setImage(avg_fft_mag.T)
+            
+            # Update amplitude and phase at current scan position
+            scan_pos = self.get_fft_scan_position()
+            if scan_pos is not None:
+                scan_y, scan_x = scan_pos
+                sy, sx = self.stem4d_data.shape[:2]
+                scan_y = max(0, min(scan_y, sy - 1))
+                scan_x = max(0, min(scan_x, sx - 1))
+                
+                fft_slice = self.compute_single_scan_fft(scan_y, scan_x)
+                
+                # Update amplitude display
+                amp_data = np.abs(fft_slice)
+                self.fft_amp_item.setImage(amp_data.T)
+                
+                # Update phase display
+                phase_data = np.angle(fft_slice)
+                self.fft_phase_item.setImage(phase_data.T)
+            
+            # Update sub-selection display
+            self.update_fft_subselection_on_the_fly()
+            
+        except Exception as e:
+            print(f"Error in delayed FFT update: {e}")
+    
+    def update_fft_subselection_on_the_fly(self):
+        """Update FFT sub-selection display for on-the-fly mode"""
+        import numpy as np
+        
+        # Get frequency selection region
+        freq_region = self.get_fft_freq_region_on_the_fly()
+        if freq_region is None:
+            return
+        
+        freq_y1, freq_x1, freq_y2, freq_x2 = freq_region
+        sy, sx = self.stem4d_data.shape[:2]
+        
+        # Sample subset of scan positions for responsiveness
+        sample_positions = min(25, sy * sx)  # Limit to 25 positions for speed
+        
+        if sample_positions >= sy * sx:
+            # Use all positions
+            sample_y = np.arange(sy)
+            sample_x = np.arange(sx)
+            y_grid, x_grid = np.meshgrid(sample_y, sample_x, indexing='ij')
+            positions = list(zip(y_grid.ravel(), x_grid.ravel()))
+        else:
+            # Sample random positions
+            y_indices = np.random.randint(0, sy, sample_positions)
+            x_indices = np.random.randint(0, sx, sample_positions)
+            positions = list(zip(y_indices, x_indices))
+        
+        # Compute sub-selection data
+        sub_data = np.zeros((sy, sx))
+        
+        for scan_y, scan_x in positions:
+            try:
+                fft_2d = self.compute_single_scan_fft(scan_y, scan_x)
+                
+                if self.fft_freq_roi_mode:
+                    # ROI mode - average over selected region
+                    sub_region = fft_2d[freq_y1:freq_y2, freq_x1:freq_x2]
+                    sub_data[scan_y, scan_x] = np.mean(np.abs(sub_region))
+                else:
+                    # Point mode - single frequency
+                    sub_data[scan_y, scan_x] = np.abs(fft_2d[freq_y1, freq_x1])
+                    
+            except Exception as e:
+                print(f"Error computing sub-selection for ({scan_y}, {scan_x}): {e}")
+                sub_data[scan_y, scan_x] = 0
+        
+        # Apply log scaling for consistency with overview display
+        log_sub_data = np.log(sub_data + 1e-10)
+        self.fft_subselect_item.setImage(log_sub_data.T)
+    
+    def get_fft_freq_region_on_the_fly(self):
+        """Get current frequency region for on-the-fly mode"""
+        pos = self.fft_freq_selector_amp.pos()
+        size = self.fft_freq_selector_amp.size()
+        
+        qy, qx = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
+        
+        if self.fft_freq_roi_mode:
+            # ROI mode - return region
+            x1, y1 = int(pos[0]), int(pos[1])
+            x2, y2 = int(pos[0] + size[0]), int(pos[1] + size[1])
+            
+            # Ensure bounds are valid
+            x1, x2 = max(0, x1), min(qx, x2)
+            y1, y2 = max(0, y1), min(qy, y2)
+            
+            return (y1, x1, y2, x2)
+        else:
+            # Point mode - return single point
+            center_x = int(pos[0] + size[0] / 2)
+            center_y = int(pos[1] + size[1] / 2)
+            
+            # Ensure bounds are valid
+            center_x = max(0, min(center_x, qx - 1))
+            center_y = max(0, min(center_y, qy - 1))
+            
+            return (center_y, center_x, center_y + 1, center_x + 1)
+    
+    def closeEvent(self, event):
+        """Handle application close event with proper memory cleanup"""
+        try:
+            self.cleanup_memory()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+        finally:
+            event.accept()
+    
+    def cleanup_memory(self):
+        """Clean up large data arrays and force garbage collection"""
+        import gc
+        
+        print("Cleaning up memory...")
+        
+        # Clear all large data arrays
+        large_arrays = [
+            'stem4d_data', 'fft4d_data', 'raw_data',
+            'eels_data', 'processed_data'
+        ]
+        
+        for array_name in large_arrays:
+            if hasattr(self, array_name) and getattr(self, array_name) is not None:
+                array = getattr(self, array_name)
+                if hasattr(array, 'shape'):
+                    size_mb = array.nbytes / (1024**2)
+                    print(f"  Deleting {array_name}: {array.shape} ({size_mb:.1f} MB)")
+                del array
+                setattr(self, array_name, None)
+        
+        # Clear FFT cache
+        if hasattr(self, 'fft_cache'):
+            cache_size = len(self.fft_cache)
+            if cache_size > 0:
+                print(f"  Clearing FFT cache: {cache_size} entries")
+            self.fft_cache.clear()
+        
+        # Clear any matplotlib figures that might be holding references
+        try:
+            import matplotlib.pyplot as plt
+            plt.close('all')
+        except:
+            pass
+        
+        # Clear any preview windows
+        if hasattr(self, 'bf_preview_window') and self.bf_preview_window is not None:
+            try:
+                self.bf_preview_window.close()
+                self.bf_preview_window = None
+            except:
+                pass
+        
+        # Force garbage collection multiple times
+        for i in range(3):
+            collected = gc.collect()
+            if collected > 0:
+                print(f"  GC pass {i+1}: collected {collected} objects")
+        
+        print("Memory cleanup complete")
+        
+        # Reset UI state after cleanup
+        self.reset_ui_after_cleanup()
+    
+    def reset_ui_after_cleanup(self):
+        """Reset UI state after memory cleanup"""
+        try:
+            # Reset FFT tab state
+            self.fft4d_computed = False
+            self.fft_crop_info = None
+            
+            # Clear all image displays
+            empty_image = None
+            if hasattr(self, 'fft_overview_item') and self.fft_overview_item is not None:
+                self.fft_overview_item.clear()
+            if hasattr(self, 'fft_amp_item') and self.fft_amp_item is not None:
+                self.fft_amp_item.clear()
+            if hasattr(self, 'fft_phase_item') and self.fft_phase_item is not None:
+                self.fft_phase_item.clear()
+            if hasattr(self, 'fft_subselect_item') and self.fft_subselect_item is not None:
+                self.fft_subselect_item.clear()
+            
+            # Hide FFT selectors
+            if hasattr(self, 'fft_scan_selector_overview'):
+                self.fft_scan_selector_overview.setVisible(False)
+            if hasattr(self, 'fft_scan_selector_subselect'):
+                self.fft_scan_selector_subselect.setVisible(False)
+            if hasattr(self, 'fft_freq_selector_amp'):
+                self.fft_freq_selector_amp.setVisible(False)
+            if hasattr(self, 'fft_freq_selector_phase'):
+                self.fft_freq_selector_phase.setVisible(False)
+            
+            # Reset button states
+            self.estimate_fft_btn.setEnabled(False)
+            self.estimate_fft_btn.setText("Estimate FFT Size")
+            self.compute_fft_btn.setEnabled(False)
+            self.compute_fft_btn.setText("Compute Spatial FFT")
+            self.compute_fft_btn.setStyleSheet("")  # Reset styling
+            
+            # Reset info labels
+            self.fft_memory_label.setText("Data cleared. Load new 4D STEM data to continue.")
+            if hasattr(self, 'fft_info_label'):
+                self.fft_info_label.setText("Data cleared. Ready for new analysis.")
+            
+            print("UI state reset complete")
+            
+        except Exception as e:
+            print(f"Error resetting UI state: {e}")
 
 def main():
     """Main entry point for the PyQtGraph application"""
