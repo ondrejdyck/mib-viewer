@@ -15,7 +15,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QLabel, QFileDialog, QMessageBox,
-                             QMenuBar, QAction, QStatusBar, QCheckBox, QSizePolicy,
+                             QMenuBar, QAction, QMenu, QStatusBar, QCheckBox, QSizePolicy,
                              QSplitter, QGroupBox, QDesktopWidget, QTabWidget, QLineEdit,
                              QComboBox, QProgressBar, QTextEdit, QGridLayout, QFrame, 
                              QRadioButton, QButtonGroup, QSpinBox)
@@ -374,20 +374,10 @@ class MibViewerPyQtGraph(QMainWindow):
         self.roi_checkbox.toggled.connect(self.on_roi_mode_toggle)
         controls_group_layout.addWidget(self.roi_checkbox)
         
-        # Colormap selection
-        colormap_label = QLabel("Colormap:")
-        controls_group_layout.addWidget(colormap_label)
-        
-        self.colormap_combo = QComboBox()
-        # Include grayscale (default PyQtGraph behavior) plus color options
-        self.colormap_combo.addItems([
-            "gray", "viridis", "plasma", "inferno", "magma", 
-            "turbo", "cividis"
-        ])
-        self.colormap_combo.setCurrentText("gray")  # Default (original behavior)
-        self.colormap_combo.currentTextChanged.connect(self.on_colormap_changed)
-        self.colormap_combo.setToolTip("Select colormap for image displays")
-        controls_group_layout.addWidget(self.colormap_combo)
+        # Colormap selection - now handled by right-click context menus
+        colormap_info_label = QLabel("Right-click images to change colormaps")
+        colormap_info_label.setStyleSheet("color: #666; font-style: italic; font-size: 10px;")
+        controls_group_layout.addWidget(colormap_info_label)
         
         controls_group_layout.addStretch()
         controls_layout.addWidget(controls_group)
@@ -962,6 +952,12 @@ class MibViewerPyQtGraph(QMainWindow):
         self.fft4d_computed = False
         self.fft_on_the_fly = False
         self.fft_crop_info = None
+        
+        # Individual colormap tracking for each image item
+        self.image_colormaps = {}
+        
+        # Setup colormap context menus for all 2D displays
+        self.setup_colormap_context_menus()
         
         # On-the-fly FFT cache and management
         self.fft_cache = {}  # Cache individual scan position FFTs: {(sy, sx): fft_2d}
@@ -1557,50 +1553,9 @@ class MibViewerPyQtGraph(QMainWindow):
         else:
             self.spectrum_plot.setLabel('left', 'Intensity')
     
-    def on_colormap_changed(self, colormap_name):
-        """Handle colormap selection change"""
-        # Handle grayscale (default PyQtGraph behavior)
-        if colormap_name == "gray":
-            colormap = None  # No colormap = default grayscale
-        else:
-            # Get the colormap
-            try:
-                colormap = pg.colormap.get(colormap_name)
-            except:
-                # Fallback to no colormap (grayscale) if colormap not found
-                colormap = None
-        
-        # Apply colormap to all image items
-        image_items = [
-            self.eels_image_item,
-            self.ndata_image_item,
-            self.scan_image_item,
-            self.diffraction_image_item,
-            self.bf_image_item,
-            self.df_image_item
-        ]
-        
-        for item in image_items:
-            if item is not None:
-                if colormap is None:
-                    # Reset to default grayscale by removing the colormap property
-                    # PyQtGraph uses a gray colormap as default when no colormap is set
-                    try:
-                        # Try to reset to default by setting a grayscale colormap
-                        gray_colormap = pg.ColorMap([0, 1], [[0, 0, 0], [255, 255, 255]])
-                        item.setColorMap(gray_colormap)
-                    except:
-                        # If that fails, try using a built-in grayscale approach
-                        # Create a simple linear grayscale colormap
-                        pos = [0.0, 1.0]
-                        color = [[0, 0, 0, 255], [255, 255, 255, 255]]  # Black to white
-                        gray_colormap = pg.ColorMap(pos, color)
-                        item.setColorMap(gray_colormap)
-                else:
-                    item.setColorMap(colormap)
-        
-        # Update displays to show new colormap
-        self.update_displays()
+    # NOTE: Global colormap method removed - now using individual context menus
+    # def on_colormap_changed(self, colormap_name):
+    #     """Handle colormap selection change - DEPRECATED: Now using right-click context menus"""
     
     def on_roi_mode_toggle(self, checked):
         """Handle ROI mode toggle"""
@@ -2127,9 +2082,12 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Display FFT data
         fft_image_item = pg.ImageItem()
-        # Apply current colormap to FFT window
-        current_colormap = self.colormap_combo.currentText() if hasattr(self, 'colormap_combo') else 'viridis'
-        fft_image_item.setColorMap(pg.colormap.get(current_colormap))
+        # Apply default viridis colormap to FFT window
+        try:
+            fft_image_item.setColorMap(pg.colormap.get('viridis'))
+        except:
+            # Fallback to grayscale if viridis not available
+            pass
         fft_plot.addItem(fft_image_item)
         
         # Create controls panel
@@ -2856,6 +2814,128 @@ class MibViewerPyQtGraph(QMainWindow):
         
         return processing_options
     
+    # ============================================================================
+    # Colormap Context Menu Methods
+    # ============================================================================
+    
+    def setup_colormap_context_menus(self):
+        """Setup custom context menus for all 2D image displays"""
+        # Define all PlotWidgets that should have colormap context menus
+        plot_widgets_and_items = [
+            # EELS tab
+            (self.eels_plot, self.eels_image_item, "EELS Image"),
+            # 4D STEM tab  
+            (self.scan_plot, self.scan_image_item, "4D STEM Scan"),
+            (self.diffraction_plot, self.diffraction_image_item, "4D STEM Diffraction"),
+            (self.bf_plot, self.bf_image_item, "Virtual BF"),
+            (self.df_plot, self.df_image_item, "Virtual DF"),
+            # FFT Explorer tab
+            (self.fft_overview_plot, self.fft_overview_item, "FFT Overview"),
+            (self.fft_subselect_plot, self.fft_subselect_item, "FFT Sub-selection"),
+            (self.fft_amp_plot, self.fft_amp_item, "FFT Amplitude"),
+            (self.fft_phase_plot, self.fft_phase_item, "FFT Phase"),
+        ]
+        
+        # Setup context menu for each plot widget
+        for plot_widget, image_item, display_name in plot_widgets_and_items:
+            # Check if both plot widget and image item exist
+            if plot_widget is not None and image_item is not None:
+                try:
+                    # Set custom context menu policy
+                    plot_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+                    # Connect to our custom context menu handler
+                    plot_widget.customContextMenuRequested.connect(
+                        lambda pos, pw=plot_widget, ii=image_item, dn=display_name: 
+                        self.show_colormap_context_menu(pw, ii, dn, pos)
+                    )
+                    
+                    # Initialize with gray colormap (default)
+                    self.image_colormaps[id(image_item)] = "gray"
+                except Exception as e:
+                    # Skip this plot if there's any issue setting up the context menu
+                    print(f"Warning: Could not setup context menu for {display_name}: {e}")
+                    continue
+    
+    def get_available_colormaps(self):
+        """Get list of available colormaps"""
+        return [
+            ("gray", "Grayscale (Default)"),
+            ("viridis", "Viridis"),
+            ("plasma", "Plasma"), 
+            ("inferno", "Inferno"),
+            ("magma", "Magma"),
+            ("turbo", "Turbo"),
+            ("cividis", "Cividis"),
+            ("seismic", "Seismic (Blue-White-Red)"),
+        ]
+    
+    def show_colormap_context_menu(self, plot_widget, image_item, display_name, position):
+        """Show colormap selection context menu"""
+        if image_item is None:
+            return
+            
+        # Create context menu
+        menu = QMenu(self)
+        menu.setTitle(f"Colormap - {display_name}")
+        
+        # Get current colormap for this image
+        current_colormap = self.image_colormaps.get(id(image_item), "gray")
+        
+        # Add colormap options
+        for colormap_key, colormap_display_name in self.get_available_colormaps():
+            action = QAction(colormap_display_name, self)
+            action.setCheckable(True)
+            action.setChecked(colormap_key == current_colormap)
+            action.triggered.connect(
+                lambda checked, cmap=colormap_key, item=image_item: 
+                self.apply_colormap_to_image(item, cmap)
+            )
+            menu.addAction(action)
+        
+        # Add separator and reset option
+        menu.addSeparator()
+        reset_action = QAction("Reset to Grayscale", self)
+        reset_action.triggered.connect(lambda: self.apply_colormap_to_image(image_item, "gray"))
+        menu.addAction(reset_action)
+        
+        # Show menu at cursor position
+        global_pos = plot_widget.mapToGlobal(position)
+        menu.exec_(global_pos)
+    
+    def apply_colormap_to_image(self, image_item, colormap_name):
+        """Apply colormap to a specific image item"""
+        if image_item is None:
+            return
+            
+        # Store the colormap choice for this image
+        self.image_colormaps[id(image_item)] = colormap_name
+        
+        # Apply the colormap
+        if colormap_name == "gray":
+            # Reset to default grayscale
+            try:
+                gray_colormap = pg.ColorMap([0, 1], [[0, 0, 0], [255, 255, 255]])
+                image_item.setColorMap(gray_colormap)
+            except:
+                # Fallback
+                pos = [0.0, 1.0]
+                color = [[0, 0, 0, 255], [255, 255, 255, 255]]
+                gray_colormap = pg.ColorMap(pos, color)
+                image_item.setColorMap(gray_colormap)
+        elif colormap_name == "seismic":
+            # Special case for seismic (blue-white-red)
+            seismic_colors = [[0, 0, 255, 255], [255, 255, 255, 255], [255, 0, 0, 255]]
+            seismic_colormap = pg.ColorMap([0.0, 0.5, 1.0], seismic_colors)
+            image_item.setColorMap(seismic_colormap)
+        else:
+            # Use PyQtGraph built-in colormap
+            try:
+                colormap = pg.colormap.get(colormap_name)
+                image_item.setColorMap(colormap)
+            except:
+                # Fallback to grayscale if colormap not found
+                self.apply_colormap_to_image(image_item, "gray")
+
     # ============================================================================
     # 4D FFT Explorer Methods
     # ============================================================================
