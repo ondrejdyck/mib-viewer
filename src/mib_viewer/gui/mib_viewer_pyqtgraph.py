@@ -374,6 +374,21 @@ class MibViewerPyQtGraph(QMainWindow):
         self.roi_checkbox.toggled.connect(self.on_roi_mode_toggle)
         controls_group_layout.addWidget(self.roi_checkbox)
         
+        # Colormap selection
+        colormap_label = QLabel("Colormap:")
+        controls_group_layout.addWidget(colormap_label)
+        
+        self.colormap_combo = QComboBox()
+        # Include grayscale (default PyQtGraph behavior) plus color options
+        self.colormap_combo.addItems([
+            "gray", "viridis", "plasma", "inferno", "magma", 
+            "turbo", "cividis"
+        ])
+        self.colormap_combo.setCurrentText("gray")  # Default (original behavior)
+        self.colormap_combo.currentTextChanged.connect(self.on_colormap_changed)
+        self.colormap_combo.setToolTip("Select colormap for image displays")
+        controls_group_layout.addWidget(self.colormap_combo)
+        
         controls_group_layout.addStretch()
         controls_layout.addWidget(controls_group)
         controls_layout.addStretch()
@@ -898,6 +913,8 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def setup_plots(self):
         """Initialize PyQtGraph plot items"""
+        # Start with default grayscale (no colormap) to preserve original behavior
+        
         # EELS tab items
         self.eels_image_item = pg.ImageItem()
         self.eels_plot.addItem(self.eels_image_item)
@@ -1138,14 +1155,32 @@ class MibViewerPyQtGraph(QMainWindow):
             # Load the data using universal loader
             raw_data = load_data_file(filename)
             
+            # Log the loaded data dimensions
+            self.log_message(f"Loaded data shape: {raw_data.shape} (scan_y, scan_x, detector_y, detector_x)")
+            
             # Detect experiment type based on data shape
             experiment_type, exp_info = detect_experiment_type(raw_data.shape)
             self.log_message(f"Detected experiment type: {experiment_type} - {exp_info['detector_type']}")
             
             if experiment_type == "EELS":
-                # Flip the energy axis for EELS data and store
-                # After transpose, energy axis is now the last dimension (index 3) for EELS
-                self.eels_data = raw_data[:, :, :, ::-1]
+                # Check if we need to sum along the shorter detector dimension
+                sy, sx, dy, dx = raw_data.shape
+                
+                # For EELS data (dy != dx), check if we need to sum
+                if min(dy, dx) > 1:  # 4D EELS - both detector dimensions > 1
+                    if dy < dx:
+                        # dy is shorter, sum along Y detector dimension (axis=2)
+                        self.log_message(f"Auto-summing Y detector dimension: {dy}×{dx} → 1×{dx}")
+                        summed_data = np.sum(raw_data, axis=2, keepdims=True)
+                    else:
+                        # dx is shorter, sum along X detector dimension (axis=3)
+                        self.log_message(f"Auto-summing X detector dimension: {dy}×{dx} → {dy}×1")
+                        summed_data = np.sum(raw_data, axis=3, keepdims=True)
+                    # Flip energy axis (the longer dimension becomes the energy axis)
+                    self.eels_data = summed_data[:, :, :, ::-1]
+                else:
+                    # 3D EELS - already summed, just flip energy axis
+                    self.eels_data = raw_data[:, :, :, ::-1]
                 
                 self.eels_filename = os.path.basename(filename)
                 self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type})")
@@ -1394,8 +1429,15 @@ class MibViewerPyQtGraph(QMainWindow):
                 
                 # Extract ROI and average
                 roi_data = self.eels_data[y:y2, x:x2, :, :]
-                # Average over spatial (0,1) and detector y (2), keep energy (3)
-                avg_spectrum = np.mean(roi_data, axis=(0, 1, 2))
+                # Average over spatial dimensions first
+                spatial_avg = np.mean(roi_data, axis=(0, 1))  # Shape: (dy, dx)
+                # Now average over the shorter detector dimension (non-energy axis)
+                if spatial_avg.shape[0] > spatial_avg.shape[1]:
+                    # Energy is in axis 0, average over axis 1
+                    avg_spectrum = np.mean(spatial_avg, axis=1)
+                else:
+                    # Energy is in axis 1, average over axis 0
+                    avg_spectrum = np.mean(spatial_avg, axis=0)
             else:
                 # For rotated ROI, use center point for now (could be enhanced later)
                 center_x, center_y = int(x + w/2), int(y + h/2)
@@ -1410,8 +1452,15 @@ class MibViewerPyQtGraph(QMainWindow):
                 y2 = min(self.eels_data.shape[0], center_y + region_size)
                 
                 roi_data = self.eels_data[y1:y2, x1:x2, :, :]
-                # Average over spatial (0,1) and detector y (2), keep energy (3)
-                avg_spectrum = np.mean(roi_data, axis=(0, 1, 2))
+                # Average over spatial dimensions first
+                spatial_avg = np.mean(roi_data, axis=(0, 1))  # Shape: (dy, dx)
+                # Now average over the shorter detector dimension (non-energy axis)
+                if spatial_avg.shape[0] > spatial_avg.shape[1]:
+                    # Energy is in axis 0, average over axis 1
+                    avg_spectrum = np.mean(spatial_avg, axis=1)
+                else:
+                    # Energy is in axis 1, average over axis 0
+                    avg_spectrum = np.mean(spatial_avg, axis=0)
             
         elif not self.roi_mode and self.current_roi is not None:
             # Crosshair mode - single point spectrum
@@ -1419,8 +1468,14 @@ class MibViewerPyQtGraph(QMainWindow):
             x, y = int(max(0, min(x, self.eels_data.shape[1] - 1))), int(max(0, min(y, self.eels_data.shape[0] - 1)))
             
             # Extract single point spectrum and average over detector
-            point_data = self.eels_data[y, x, :, :]  # Shape: (1, 1024) after transpose
-            avg_spectrum = np.mean(point_data, axis=0)  # Average over detector y (axis 0), result: (1024,)
+            point_data = self.eels_data[y, x, :, :]  # Shape: (dy, dx) where one is 1, other is energy
+            # Average over the shorter dimension (non-energy axis) to get energy spectrum
+            if point_data.shape[0] > point_data.shape[1]:
+                # Energy is in axis 0, average over axis 1
+                avg_spectrum = np.mean(point_data, axis=1)
+            else:
+                # Energy is in axis 1, average over axis 0  
+                avg_spectrum = np.mean(point_data, axis=0)
         else:
             return
         
@@ -1501,6 +1556,51 @@ class MibViewerPyQtGraph(QMainWindow):
             self.spectrum_plot.setLabel('left', 'log₁₀(Intensity)')
         else:
             self.spectrum_plot.setLabel('left', 'Intensity')
+    
+    def on_colormap_changed(self, colormap_name):
+        """Handle colormap selection change"""
+        # Handle grayscale (default PyQtGraph behavior)
+        if colormap_name == "gray":
+            colormap = None  # No colormap = default grayscale
+        else:
+            # Get the colormap
+            try:
+                colormap = pg.colormap.get(colormap_name)
+            except:
+                # Fallback to no colormap (grayscale) if colormap not found
+                colormap = None
+        
+        # Apply colormap to all image items
+        image_items = [
+            self.eels_image_item,
+            self.ndata_image_item,
+            self.scan_image_item,
+            self.diffraction_image_item,
+            self.bf_image_item,
+            self.df_image_item
+        ]
+        
+        for item in image_items:
+            if item is not None:
+                if colormap is None:
+                    # Reset to default grayscale by removing the colormap property
+                    # PyQtGraph uses a gray colormap as default when no colormap is set
+                    try:
+                        # Try to reset to default by setting a grayscale colormap
+                        gray_colormap = pg.ColorMap([0, 1], [[0, 0, 0], [255, 255, 255]])
+                        item.setColorMap(gray_colormap)
+                    except:
+                        # If that fails, try using a built-in grayscale approach
+                        # Create a simple linear grayscale colormap
+                        pos = [0.0, 1.0]
+                        color = [[0, 0, 0, 255], [255, 255, 255, 255]]  # Black to white
+                        gray_colormap = pg.ColorMap(pos, color)
+                        item.setColorMap(gray_colormap)
+                else:
+                    item.setColorMap(colormap)
+        
+        # Update displays to show new colormap
+        self.update_displays()
     
     def on_roi_mode_toggle(self, checked):
         """Handle ROI mode toggle"""
@@ -2027,6 +2127,9 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Display FFT data
         fft_image_item = pg.ImageItem()
+        # Apply current colormap to FFT window
+        current_colormap = self.colormap_combo.currentText() if hasattr(self, 'colormap_combo') else 'viridis'
+        fft_image_item.setColorMap(pg.colormap.get(current_colormap))
         fft_plot.addItem(fft_image_item)
         
         # Create controls panel

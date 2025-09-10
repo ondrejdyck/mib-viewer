@@ -148,10 +148,51 @@ def load_mib(path_buffer, scan_size=None):
         shape=mib_prop.scan_size
     )
     
-    # Transpose detector dimensions to convert from (width, height) to (height, width)
-    # This fixes the transposition issue where QD gives (width, height) but we expect (height, width)
+    # Fix detector dimension scrambling issue
+    # QD gives merlin_size as (width, height) but detector data may be scrambled during memmap loading
+    # Instead of transpose, reshape the detector frames to correct orientation
     raw_data = data['data']
-    return np.transpose(raw_data, (0, 1, 3, 2))
+    sy, sx = raw_data.shape[:2]  # Scan dimensions
+    detector_width, detector_height = mib_prop.merlin_size  # Original (width, height) from MIB header
+    
+    # Current detector shape as loaded by memmap
+    current_dy, current_dx = raw_data.shape[2:4]
+    
+    print(f"MIB detector size from header: {detector_width}×{detector_height} (width×height)")
+    print(f"Loaded detector shape: {current_dy}×{current_dx}")
+    
+    # Apply reshape fix ONLY for EELS data that appears to be scrambled
+    # Safe condition: only reshape when we have rectangular detector (EELS) with wrong orientation
+    if current_dy != current_dx and current_dy > current_dx:
+        # This looks like EELS data where dy > dx (likely scrambled)
+        # For EELS, we expect dy < dx (shorter × longer dimensions)
+        
+        # Additional safety check: dimensions should match the header values
+        if {current_dy, current_dx} == {detector_width, detector_height}:
+            print(f"EELS reshape fix: detected scrambled detector dimensions")
+            print(f"  Current: {current_dy}×{current_dx} (dy > dx, likely scrambled)")
+            print(f"  Header: {detector_width}×{detector_height} (width×height)")
+            print(f"  Reshaping: ({current_dy}, {current_dx}) → ({current_dx}, {current_dy})")
+            
+            # Reshape each detector frame to swap dimensions back
+            reshaped_data = np.zeros((sy, sx, current_dx, current_dy), dtype=raw_data.dtype)
+            for scan_y in range(sy):
+                for scan_x in range(sx):
+                    # Reshape the detector frame to unscramble
+                    frame = raw_data[scan_y, scan_x, :, :]  # Shape: (dy, dx) - scrambled
+                    reshaped_frame = frame.reshape(current_dx, current_dy)  # Unscramble to (dx, dy)
+                    reshaped_data[scan_y, scan_x, :, :] = reshaped_frame
+            
+            print(f"  Result: {reshaped_data.shape[2]}×{reshaped_data.shape[3]} (now dy < dx for EELS)")
+            return reshaped_data
+        else:
+            print(f"Detector dimensions don't match header - skipping reshape for safety")
+            print(f"  Loaded: {current_dy}×{current_dx}, Header: {detector_width}×{detector_height}")
+            return raw_data
+    else:
+        # Data appears to be in correct orientation (4D STEM or properly oriented EELS)
+        print("Detector orientation appears correct - no reshaping needed")
+        return raw_data
 
 
 def load_emd(path_buffer):
@@ -198,10 +239,10 @@ def load_emd(path_buffer):
             if len(data.shape) != 4:
                 raise ValueError(f"Expected 4D data, got {len(data.shape)}D with shape {data.shape}")
             
-            # Apply same transpose as MIB loader for consistency
-            # Convert from stored (scan_y, scan_x, detector_width, detector_height) 
-            # to expected (scan_y, scan_x, detector_height, detector_width)
-            return np.transpose(data, (0, 1, 3, 2))
+            # EMD files store data that's already been processed by load_mib() 
+            # which means the detector dimensions are already transposed correctly
+            # No additional transpose needed - return data as-is
+            return data
             
     except OSError as e:
         if "Unable to open file" in str(e):
@@ -348,7 +389,7 @@ def apply_data_processing(data_4d, processing_options):
     
     # Apply Y-summing second (if requested)
     if processing_options.get('sum_y', False):
-        data_4d = np.sum(data_4d, axis=3, keepdims=True)
+        data_4d = np.sum(data_4d, axis=2, keepdims=True)
         print(f"Applied Y-summing: {data_4d.shape}")
     
     return data_4d
@@ -417,7 +458,7 @@ def calculate_processed_size(original_shape, processing_options):
     
     # Apply Y-summing
     if processing_options.get('sum_y', False):
-        qx = 1  # Y dimension becomes 1
+        qy = 1  # Y dimension becomes 1
     
     new_shape = (sy, sx, qy, qx)
     
