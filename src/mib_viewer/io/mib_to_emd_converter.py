@@ -22,20 +22,21 @@ import h5py
 import emdfile
 from tqdm import tqdm
 
-# Import our MIB loading functions
+# Import our MIB and EMD loading functions
 try:
     # Try relative import (when run as module)
-    from .mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
+    from .mib_loader import load_mib, load_emd, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
 except ImportError:
     # Fall back for direct execution
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from io.mib_loader import load_mib, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
+    from io.mib_loader import load_mib, load_emd, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
 
 class MibToEmdConverter:
     """
-    Converter for MIB files to EMD 1.0 format with py4DSTEM compatibility
+    Converter for MIB and EMD files to processed EMD 1.0 format with py4DSTEM compatibility
+    Supports both MIB → EMD conversion and EMD → EMD processing (binning, Y-summing)
     """
     
     def __init__(self, compression='gzip', compression_level=6, chunk_size=None, log_callback=None):
@@ -70,6 +71,93 @@ class MibToEmdConverter:
             except Exception:
                 # Don't let GUI logging errors break the conversion
                 pass
+    
+    def detect_file_type(self, file_path: str) -> str:
+        """
+        Detect whether input file is MIB or EMD format
+        
+        Parameters:
+        -----------
+        file_path : str
+            Path to input file
+            
+        Returns:
+        --------
+        str : 'mib' or 'emd'
+        """
+        file_ext = os.path.splitext(file_path)[1].lower()
+        
+        if file_ext == '.mib':
+            return 'mib'
+        elif file_ext in ['.emd', '.h5', '.hdf5']:
+            # Check if it's a valid EMD file by trying to access structure
+            try:
+                with h5py.File(file_path, 'r') as f:
+                    if 'version_1' in f and 'data' in f['version_1']:
+                        return 'emd'
+            except:
+                pass
+            # Fallback - assume EMD based on extension
+            return 'emd'
+        else:
+            # Default to MIB if unknown extension
+            return 'mib'
+    
+    def analyze_emd_file(self, emd_path: str) -> Dict[str, Any]:
+        """
+        Analyze EMD file to extract metadata and dimensions
+        
+        Parameters:
+        -----------
+        emd_path : str
+            Path to input EMD file
+            
+        Returns:
+        --------
+        dict : Metadata dictionary with file properties
+        """
+        self.log(f"Analyzing EMD file: {os.path.basename(emd_path)}")
+        
+        with h5py.File(emd_path, 'r') as f:
+            # Get file size
+            filesize = os.path.getsize(emd_path)
+            
+            # Navigate to data
+            datacube = f['version_1/data/datacubes/datacube_000']
+            data_shape = datacube['data'].shape
+            data_dtype = datacube['data'].dtype
+            
+            # Extract existing metadata if available
+            metadata = {
+                'original_filename': os.path.basename(emd_path),
+                'filesize_gb': filesize / (1024**3),
+                'shape_4d': data_shape,
+                'pixel_dtype': str(data_dtype),
+                'num_frames': data_shape[0] * data_shape[1] if len(data_shape) >= 2 else 0,
+                'scan_size': (data_shape[0], data_shape[1]) if len(data_shape) >= 2 else (1, 1),
+                'detector_size': (data_shape[2], data_shape[3]) if len(data_shape) >= 4 else (1, 1),
+            }
+            
+            # Try to extract original metadata from microscope group
+            try:
+                microscope_group = f['version_1/metadata/microscope']
+                for key, value in microscope_group.attrs.items():
+                    # Convert bytes to string if needed
+                    if isinstance(value, bytes):
+                        value = value.decode('utf-8')
+                    elif isinstance(value, np.ndarray):
+                        value = value.tolist()
+                    metadata[key] = value
+            except KeyError:
+                # No microscope metadata available
+                pass
+        
+        self.log(f"  Shape: {metadata['shape_4d']}")
+        self.log(f"  Size: {metadata['filesize_gb']:.2f} GB")
+        self.log(f"  Frames: {metadata['num_frames']:,}")
+        self.log(f"  Detector: {metadata['detector_size']}")
+        
+        return metadata
         
     def analyze_mib_file(self, mib_path: str) -> Dict[str, Any]:
         """
@@ -174,15 +262,15 @@ class MibToEmdConverter:
         self.log(f"  Threading-optimized for future multithreading")
         return chunks
     
-    def convert_to_emd(self, mib_path: str, emd_path: str, metadata_extra: Optional[Dict] = None, processing_options: Optional[Dict] = None) -> Dict[str, Any]:
+    def convert_to_emd(self, input_path: str, output_path: str, metadata_extra: Optional[Dict] = None, processing_options: Optional[Dict] = None) -> Dict[str, Any]:
         """
-        Convert MIB file to EMD 1.0 format
+        Convert MIB file to EMD 1.0 format or process existing EMD file
         
         Parameters:
         -----------
-        mib_path : str
-            Path to input MIB file
-        emd_path : str
+        input_path : str
+            Path to input MIB or EMD file
+        output_path : str
             Path to output EMD/HDF5 file
         metadata_extra : dict, optional
             Additional metadata to include
@@ -193,18 +281,28 @@ class MibToEmdConverter:
         --------
         dict : Conversion statistics
         """
-        self.log(f"\nStarting conversion: {os.path.basename(mib_path)} → {os.path.basename(emd_path)}")
+        # Detect input file type
+        file_type = self.detect_file_type(input_path)
+        self.log(f"\nDetected file type: {file_type.upper()}")
+        self.log(f"Starting processing: {os.path.basename(input_path)} → {os.path.basename(output_path)}")
         
-        # Analyze input file
-        metadata = self.analyze_mib_file(mib_path)
+        # Analyze input file based on type
+        if file_type == 'mib':
+            metadata = self.analyze_mib_file(input_path)
+        else:  # emd
+            metadata = self.analyze_emd_file(input_path)
+            
         if metadata_extra:
             metadata.update(metadata_extra)
         
-        # Load MIB data
-        self.log("\nLoading MIB data...")
+        # Load data based on file type
+        self.log(f"\nLoading {file_type.upper()} data...")
         start_time = time.time()
         
-        data_4d = load_mib(mib_path, metadata['scan_size'])
+        if file_type == 'mib':
+            data_4d = load_mib(input_path, metadata['scan_size'])
+        else:  # emd
+            data_4d = load_emd(input_path)
         
         load_time = time.time() - start_time
         self.log(f"  Loaded in {load_time:.1f}s")
@@ -251,7 +349,7 @@ class MibToEmdConverter:
             if self.compression_level is not None:
                 compression_kwargs['compression_opts'] = self.compression_level
         
-        with h5py.File(emd_path, 'w') as f:
+        with h5py.File(output_path, 'w') as f:
             # Create EMD 1.0 root structure
             f.attrs['emd_group_type'] = 'file'
             f.attrs['version_major'] = 1
@@ -328,8 +426,8 @@ class MibToEmdConverter:
         write_time = time.time() - start_time
         
         # Calculate statistics
-        input_size = os.path.getsize(mib_path)
-        output_size = os.path.getsize(emd_path)
+        input_size = os.path.getsize(input_path)
+        output_size = os.path.getsize(output_path)
         compression_ratio = input_size / output_size
         
         stats = {
@@ -350,14 +448,23 @@ class MibToEmdConverter:
         return stats
 
 def main():
-    """Command line interface for MIB to EMD conversion"""
+    """Command line interface for MIB/EMD to EMD conversion and processing"""
     parser = argparse.ArgumentParser(
-        description='Convert MIB files to EMD 1.0 format with optimal compression',
-        epilog='Example: python mib_to_emd_converter.py data.mib data.emd'
+        description='Convert MIB files to EMD 1.0 format or process existing EMD files with binning/Y-summing',
+        epilog='Examples:\n  python mib_to_emd_converter.py data.mib data.emd\n  python mib_to_emd_converter.py input.emd processed.emd --bin-factor 2 --sum-y',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    parser.add_argument('input_mib', help='Input MIB file path')
+    parser.add_argument('input_file', help='Input MIB or EMD file path')
     parser.add_argument('output_emd', help='Output EMD file path (.emd extension recommended)')
+    
+    # Processing options
+    parser.add_argument('--bin-factor', type=int, choices=[1, 2, 4, 8, 16], default=1,
+                       help='Binning factor for detector dimensions (default: 1, no binning)')
+    parser.add_argument('--bin-method', choices=['mean', 'sum'], default='mean',
+                       help='Binning method (default: mean)')
+    parser.add_argument('--sum-y', action='store_true',
+                       help='Sum in Y direction for EELS processing')
     parser.add_argument('--compression', choices=['gzip', 'szip', 'lzf', 'none'], 
                        default='gzip', help='Compression algorithm (default: gzip)')
     parser.add_argument('--compression-level', type=int, choices=range(1, 10),
@@ -370,8 +477,8 @@ def main():
     args = parser.parse_args()
     
     # Validate input file
-    if not os.path.exists(args.input_mib):
-        print(f"Error: Input file not found: {args.input_mib}")
+    if not os.path.exists(args.input_file):
+        print(f"Error: Input file not found: {args.input_file}")
         sys.exit(1)
     
     # Check output file
@@ -382,6 +489,14 @@ def main():
     
     # Create output directory if needed
     os.makedirs(os.path.dirname(args.output_emd) or '.', exist_ok=True)
+    
+    # Setup processing options
+    processing_options = {}
+    if args.bin_factor > 1:
+        processing_options['bin_factor'] = args.bin_factor
+        processing_options['bin_method'] = args.bin_method
+    if args.sum_y:
+        processing_options['sum_y'] = True
     
     # Setup converter
     compression = args.compression if args.compression != 'none' else None
@@ -394,13 +509,19 @@ def main():
     )
     
     try:
-        # Convert file
-        stats = converter.convert_to_emd(args.input_mib, args.output_emd)
+        # Convert/process file
+        stats = converter.convert_to_emd(args.input_file, args.output_emd, 
+                                        processing_options=processing_options if processing_options else None)
         
-        # Success message
-        print(f"\n[SUCCESS] Successfully converted {os.path.basename(args.input_mib)} to EMD format!")
+        # Success message  
+        input_type = "MIB" if args.input_file.lower().endswith('.mib') else "EMD"
+        operation = "converted" if input_type == "MIB" else "processed"
+        print(f"\n[SUCCESS] Successfully {operation} {os.path.basename(args.input_file)} to EMD format!")
         print(f"   Saved: {args.output_emd}")
         print(f"   Size reduction: {stats['compression_ratio']:.1f}x")
+        
+        if processing_options:
+            print(f"   Processing applied: {', '.join(f'{k}={v}' for k, v in processing_options.items())}")
         
     except KeyboardInterrupt:
         print("\n[CANCELLED] Conversion cancelled by user")
@@ -410,7 +531,8 @@ def main():
         sys.exit(1)
         
     except Exception as e:
-        print(f"\n[ERROR] Conversion failed: {str(e)}")
+        operation = "conversion" if args.input_file.lower().endswith('.mib') else "processing"
+        print(f"\n[ERROR] {operation.capitalize()} failed: {str(e)}")
         # Clean up partial file
         if os.path.exists(args.output_emd):
             os.remove(args.output_emd)
