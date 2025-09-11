@@ -29,6 +29,7 @@ try:
                                      detect_experiment_type, apply_data_processing, calculate_processed_size,
                                      get_valid_bin_factors)
     from ..io.mib_to_emd_converter import MibToEmdConverter
+    from .enhanced_conversion_worker import ConversionWorkerFactory
 except ImportError:
     # Fall back for direct execution
     from mib_viewer.io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
@@ -36,6 +37,7 @@ except ImportError:
                                           detect_experiment_type, apply_data_processing, calculate_processed_size,
                                           get_valid_bin_factors)
     from mib_viewer.io.mib_to_emd_converter import MibToEmdConverter
+    from mib_viewer.gui.enhanced_conversion_worker import ConversionWorkerFactory
 
 # Configure PyQtGraph
 pg.setConfigOptions(antialias=True, useOpenGL=True)
@@ -2532,9 +2534,11 @@ class MibViewerPyQtGraph(QMainWindow):
         processing_options = self.get_processing_options()
         
         # Create worker and thread
-        self.conversion_worker = ConversionWorker(
+        self.conversion_worker = ConversionWorkerFactory.create_worker(
             input_path, output_path, compression, compression_level, 
-            processing_options=processing_options
+            processing_options=processing_options,
+            log_callback=self.log_message,
+            use_enhanced=True  # Enable multithreaded pipeline
         )
         self.conversion_thread = QThread()
         

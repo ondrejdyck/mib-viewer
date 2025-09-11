@@ -15,5 +15,8 @@ emdfile>=0.0.16
 tqdm>=4.60.0
 py4dstem>=0.14.16
 
+# System monitoring
+psutil>=5.8.0
+
 # Development tools (optional)
 pyinstaller>=6.15.0
