@@ -351,6 +351,7 @@ class AdaptiveMibEmdConverter:
         
         self.log(f"Adaptive conversion completed in {total_time:.1f}s")
         self.log(f"Achieved {chunking_result.io_reduction_factor}x I/O reduction!")
+        self.log("About to create clean result dictionary...")
         
         # Create a clean copy of the result without any problematic references
         clean_result = {
@@ -376,16 +377,45 @@ class AdaptiveMibEmdConverter:
         if 'total_bytes_processed' in conversion_stats:
             clean_result['total_bytes_processed'] = int(conversion_stats['total_bytes_processed'])
             
-        # Clear all references to large objects
-        chunk_queue = None
-        progress_reporter = None
-        conversion_stats = None
-        result = None
-        
-        # Force garbage collection
-        import gc
-        gc.collect()
-        
+        # Clear all references to large objects safely
+        self.log("Starting cleanup of large objects...")
+
+        try:
+            chunk_queue = None
+            self.log("Cleared chunk_queue reference")
+        except Exception as e:
+            self.log(f"Warning: Error clearing chunk_queue: {str(e)}")
+
+        try:
+            progress_reporter = None
+            self.log("Cleared progress_reporter reference")
+        except Exception as e:
+            self.log(f"Warning: Error clearing progress_reporter: {str(e)}")
+
+        try:
+            conversion_stats = None
+            self.log("Cleared conversion_stats reference")
+        except Exception as e:
+            self.log(f"Warning: Error clearing conversion_stats: {str(e)}")
+
+        try:
+            result = None
+            self.log("Cleared result reference")
+        except Exception as e:
+            self.log(f"Warning: Error clearing result: {str(e)}")
+
+        # Force garbage collection with error handling
+        try:
+            self.log("Starting garbage collection...")
+            import gc
+            gc.collect()
+            self.log("Garbage collection completed")
+        except Exception as e:
+            self.log(f"Warning: Error during garbage collection: {str(e)}")
+
+        self.log("Cleanup completed, about to return result...")
+        self.log(f"Result keys: {list(clean_result.keys())}")
+        self.log("Attempting to return clean_result now...")
         return clean_result
     
     def _calculate_processed_shape(self,
@@ -516,65 +546,122 @@ class AdaptiveMibEmdConverter:
         }
         stats_lock = threading.Lock()
         
-        # HDF5 write lock - only one thread can write to HDF5 file at a time
-        hdf5_write_lock = threading.Lock()
-        
-        # Worker function
-        def worker_thread(worker_id: int):
-            """Worker thread that processes chunks from the queue"""
+        # OPTIMIZATION: Keep HDF5 file open throughout conversion
+        # This eliminates file open/close overhead and improves load balancing
+        hdf5_file = None
+        hdf5_dataset = None
+        hdf5_file_closed = False  # Track if file was already closed
+
+        try:
+            hdf5_file = h5py.File(output_path, 'a')  # Keep file open
+            hdf5_dataset = hdf5_file['version_1/data/datacubes/datacube_000/data']
+            hdf5_write_lock = threading.Lock()  # Still need lock for thread safety
+
+            # Worker function
+            def worker_thread(worker_id: int):
+                """Worker thread that processes chunks from the queue"""
             
-            # Load MIB properties once per worker
-            with open(input_path, 'rb') as f:
-                header_bytes = f.read(384)
-            header_fields = header_bytes.decode('utf-8', errors='ignore').split(',')
-            mib_props = get_mib_properties(header_fields)
+                # Load MIB properties once per worker
+                with open(input_path, 'rb') as f:
+                    header_bytes = f.read(384)
+                header_fields = header_bytes.decode('utf-8', errors='ignore').split(',')
+                mib_props = get_mib_properties(header_fields)
             
-            while not self._stop_requested:
-                chunk_info = None
+                while not self._stop_requested:
+                    chunk_info = None
+                    try:
+                        # Get next chunk
+                        chunk_info = work_queue.get(timeout=1.0)
+                        if chunk_info is None:  # Sentinel to stop
+                            work_queue.task_done()  # Mark sentinel as done
+                            break
+
+                        # Process this chunk
+                        self._process_single_chunk(
+                            chunk_info, input_path, output_path, mib_props,
+                            processing_options, progress_reporter, worker_id, stats, stats_lock,
+                            hdf5_write_lock, hdf5_dataset
+                        )
+
+                        work_queue.task_done()  # Mark successful processing as done
+
+                    except queue.Empty:
+                        continue  # Check for more work
+                    except Exception as e:
+                        if chunk_info is not None:
+                            work_queue.task_done()  # Mark failed processing as done
+
+                        with stats_lock:
+                            stats['worker_errors'].append(f"Worker {worker_id}: {str(e)}")
+                        progress_reporter.chunk_failed(
+                            chunk_info.id if chunk_info else -1,
+                            worker_id, e
+                        )
+
+            # Start worker threads
+            with ThreadPoolExecutor(max_workers=chunking_result.num_workers) as executor:
+                # Stagger worker start times to reduce I/O contention
+                futures = []
+                for worker_id in range(chunking_result.num_workers):
+                    future = executor.submit(worker_thread, worker_id)
+                    futures.append(future)
+                    time.sleep(0.1)  # 100ms stagger
+
+                # Wait for all workers to complete
+                self.log("Waiting for all worker threads to complete...")
+                for i, future in enumerate(as_completed(futures)):
+                    try:
+                        self.log(f"Worker thread {i} completing...")
+                        future.result()  # This will raise any worker exceptions
+                        self.log(f"Worker thread {i} completed successfully")
+                    except Exception as e:
+                        self.log(f"Worker thread {i} error: {str(e)}")
+
+                self.log("All worker threads completed, exiting ThreadPoolExecutor...")
+
+                # Close HDF5 file BEFORE ThreadPoolExecutor cleanup to avoid thread access issues
+                self.log("Pre-emptively closing HDF5 file before thread cleanup...")
+                if hdf5_file is not None and not hdf5_file_closed:
+                    try:
+                        hdf5_dataset = None  # Clear dataset reference first
+                        hdf5_file.close()  # Close file
+                        hdf5_file = None   # Clear file reference
+                        hdf5_file_closed = True  # Mark as closed
+                        self.log("Pre-emptive HDF5 cleanup completed")
+                    except Exception as e:
+                        self.log(f"Warning: Error in pre-emptive HDF5 cleanup: {str(e)}")
+
+        finally:
+            # Clean up HDF5 objects safely
+            self.log("Starting HDF5 cleanup...")
+
+            # Clear dataset reference first
+            try:
+                hdf5_dataset = None
+                self.log("Cleared HDF5 dataset reference")
+            except Exception as e:
+                self.log(f"Warning: Error clearing HDF5 dataset: {str(e)}")
+
+            # Close shared HDF5 file handle (only if not already closed)
+            if hdf5_file is not None and not hdf5_file_closed:
                 try:
-                    # Get next chunk
-                    chunk_info = work_queue.get(timeout=1.0)
-                    if chunk_info is None:  # Sentinel to stop
-                        work_queue.task_done()  # Mark sentinel as done
-                        break
-                    
-                    # Process this chunk
-                    self._process_single_chunk(
-                        chunk_info, input_path, output_path, mib_props,
-                        processing_options, progress_reporter, worker_id, stats, stats_lock, hdf5_write_lock
-                    )
-                    
-                    work_queue.task_done()  # Mark successful processing as done
-                    
-                except queue.Empty:
-                    continue  # Check for more work
+                    hdf5_file.close()
+                    hdf5_file_closed = True
+                    self.log("Closed shared HDF5 file handle")
                 except Exception as e:
-                    if chunk_info is not None:
-                        work_queue.task_done()  # Mark failed processing as done
-                        
-                    with stats_lock:
-                        stats['worker_errors'].append(f"Worker {worker_id}: {str(e)}")
-                    progress_reporter.chunk_failed(
-                        chunk_info.id if chunk_info else -1, 
-                        worker_id, e
-                    )
-        
-        # Start worker threads
-        with ThreadPoolExecutor(max_workers=chunking_result.num_workers) as executor:
-            # Stagger worker start times to reduce I/O contention
-            futures = []
-            for worker_id in range(chunking_result.num_workers):
-                future = executor.submit(worker_thread, worker_id)
-                futures.append(future)
-                time.sleep(0.1)  # 100ms stagger
-            
-            # Wait for all workers to complete
-            for future in as_completed(futures):
-                try:
-                    future.result()  # This will raise any worker exceptions
-                except Exception as e:
-                    self.log(f"Worker thread error: {str(e)}")
-        
+                    self.log(f"Warning: Error closing HDF5 file: {str(e)}")
+            elif hdf5_file_closed:
+                self.log("HDF5 file already closed (skipping)")
+
+            # Clear file reference
+            try:
+                hdf5_file = None
+                self.log("Cleared HDF5 file reference")
+            except Exception as e:
+                self.log(f"Warning: Error clearing HDF5 file reference: {str(e)}")
+
+            self.log("HDF5 cleanup completed")
+
         # All threads are completed by the ThreadPoolExecutor context manager
         self.log("All queue items processed successfully")
         
@@ -587,14 +674,15 @@ class AdaptiveMibEmdConverter:
     def _process_single_chunk(self,
                             chunk_info: ChunkInfo,
                             input_path: str,
-                            output_path: str, 
+                            output_path: str,
                             mib_props: Any,
                             processing_options: Optional[Dict],
                             progress_reporter: ProgressReporter,
                             worker_id: int,
                             stats: Dict[str, Any],
                             stats_lock: threading.Lock,
-                            hdf5_write_lock: threading.Lock):
+                            hdf5_write_lock: threading.Lock,
+                            hdf5_dataset: Any):
         """Process a single chunk through the read->process->write pipeline"""
         
         try:
@@ -620,7 +708,7 @@ class AdaptiveMibEmdConverter:
             
             # Phase 3: Write chunk to output (thread-safe)
             write_start = time.time()
-            self._write_chunk_to_emd(output_path, chunk_info, chunk_data, hdf5_write_lock)
+            self._write_chunk_to_emd(output_path, chunk_info, chunk_data, hdf5_write_lock, hdf5_dataset)
             write_time = time.time() - write_start
             
             progress_reporter.chunk_write_complete(chunk_info.id, worker_id, write_time)
@@ -690,30 +778,29 @@ class AdaptiveMibEmdConverter:
         
         return chunk_data
     
-    def _write_chunk_to_emd(self, output_path: str, chunk_info: ChunkInfo, chunk_data: np.ndarray, hdf5_write_lock: threading.Lock):
-        """Write processed chunk to EMD file with thread safety"""
-        
+    def _write_chunk_to_emd(self, output_path: str, chunk_info: ChunkInfo, chunk_data: np.ndarray,
+                           hdf5_write_lock: threading.Lock, hdf5_dataset: Any):
+        """Write processed chunk to EMD file with thread safety using shared dataset"""
+
         # Only one thread can write to HDF5 file at a time
         with hdf5_write_lock:
-            with h5py.File(output_path, 'a') as f:  # Append mode
-                dataset = f['version_1/data/datacubes/datacube_000/data']
-                
-                # Calculate the correct output slice based on chunk_data dimensions
-                # The scan dimensions (sy, sx) remain the same, but detector dimensions may change due to binning
-                original_slice = chunk_info.output_slice
-                sy_slice = original_slice[0]  # Scan Y slice (unchanged)
-                sx_slice = original_slice[1]  # Scan X slice (unchanged)
-                
-                # For detector dimensions, use the full range since data is already processed to correct size
-                qy_max, qx_max = chunk_data.shape[2], chunk_data.shape[3]
-                corrected_slice = (
-                    sy_slice,
-                    sx_slice,
-                    slice(0, qy_max),  # Full detector Y range based on actual data
-                    slice(0, qx_max)   # Full detector X range based on actual data  
-                )
-                
-                dataset[corrected_slice] = chunk_data
+            # Use the shared dataset instead of opening file each time
+            # Calculate the correct output slice based on chunk_data dimensions
+            # The scan dimensions (sy, sx) remain the same, but detector dimensions may change due to binning
+            original_slice = chunk_info.output_slice
+            sy_slice = original_slice[0]  # Scan Y slice (unchanged)
+            sx_slice = original_slice[1]  # Scan X slice (unchanged)
+
+            # For detector dimensions, use the full range since data is already processed to correct size
+            qy_max, qx_max = chunk_data.shape[2], chunk_data.shape[3]
+            corrected_slice = (
+                sy_slice,
+                sx_slice,
+                slice(0, qy_max),  # Full detector Y range based on actual data
+                slice(0, qx_max)   # Full detector X range based on actual data
+            )
+
+            hdf5_dataset[corrected_slice] = chunk_data
     
     def _create_fixed_chunk_result(self, file_info: Dict[str, Any], chunk_size: Tuple[int, int, int, int]) -> ChunkingResult:
         """Create a chunking result for user-specified fixed chunk size"""

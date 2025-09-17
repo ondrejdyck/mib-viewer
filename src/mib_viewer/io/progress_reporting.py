@@ -336,16 +336,17 @@ class ProgressReporter:
                 pass
     
     def _log(self, message: str):
-        """Send message to log callback"""
+        """Send message to log callback and always print to terminal"""
+        # Always print to terminal for debugging (especially when GUI crashes)
+        print(f"ProgressReporter: {message}")
+
+        # Also send to GUI log callback if available
         if self.log_callback:
             try:
                 self.log_callback(message)
             except Exception:
                 # Don't let logging errors break the conversion
                 pass
-        else:
-            # Fallback to print if no log callback
-            print(message)
 
 
 def create_progress_reporter(chunking_result: ChunkingResult,

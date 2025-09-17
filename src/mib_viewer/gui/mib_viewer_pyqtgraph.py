@@ -2538,7 +2538,7 @@ class MibViewerPyQtGraph(QMainWindow):
             input_path, output_path, compression, compression_level,
             processing_options=processing_options,
             log_callback=self.log_message,
-            use_enhanced=False  # Use fixed original converter instead of V2
+            use_enhanced=True   # Use EnhancedConversionWorker with fixed AdaptiveMibEmdConverter
         )
         self.conversion_thread = QThread()
         
@@ -2589,9 +2589,11 @@ class MibViewerPyQtGraph(QMainWindow):
         # Enable "Open Converted File" button
         self.last_converted_file = output_path
         self.open_converted_btn.setEnabled(True)
-        
+
         # Clean up thread
+        print("DEBUG: About to cleanup conversion thread...")
         self.cleanup_conversion_thread()
+        print("DEBUG: Conversion thread cleanup completed")
     
     def on_conversion_failed(self, error_message):
         """Handle conversion failure"""
@@ -2608,17 +2610,29 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def cleanup_conversion_thread(self):
         """Clean up conversion thread and reset UI state"""
+        print("DEBUG: Starting cleanup_conversion_thread")
+
         # Reset UI state
+        print("DEBUG: Resetting UI state...")
         self.convert_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        
+
         # Clean up thread if it exists
+        print("DEBUG: Checking for conversion thread...")
         if hasattr(self, 'conversion_thread') and self.conversion_thread:
+            print("DEBUG: Conversion thread exists, checking if running...")
             if self.conversion_thread.isRunning():
+                print("DEBUG: Thread still running, calling quit()...")
                 self.conversion_thread.quit()
+                print("DEBUG: Waiting for thread to finish...")
                 self.conversion_thread.wait()
+                print("DEBUG: Thread finished")
+            print("DEBUG: Setting thread and worker to None...")
             self.conversion_thread = None
             self.conversion_worker = None
+            print("DEBUG: Thread cleanup complete")
+        else:
+            print("DEBUG: No conversion thread to clean up")
     
     def cancel_conversion(self):
         """Cancel the ongoing conversion"""

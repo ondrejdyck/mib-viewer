@@ -148,19 +148,29 @@ class AdaptiveChunkCalculator:
         
         # Calculate optimal worker count
         num_workers = self._calculate_worker_count(available_memory_gb, file_size_gb)
-        
-        # Calculate memory allocation per worker
-        usable_memory_gb = available_memory_gb * self.memory_safety_factor
-        memory_per_worker_gb = usable_memory_gb / num_workers
-        target_chunk_memory_gb = memory_per_worker_gb * self.worker_memory_factor
-        target_chunk_bytes = target_chunk_memory_gb * (1024**3)
+
+        # DUAL-CONSTRAINT APPROACH: Calculate both memory and data distribution limits
+        memory_constraint_gb = self._calculate_memory_constraint_per_worker(available_memory_gb, num_workers)
+        data_distribution_constraint_gb = self._calculate_data_distribution_constraint_per_worker(file_size_gb, num_workers)
+
+        # Choose the limiting constraint (the bottleneck)
+        target_chunk_size_gb = min(memory_constraint_gb, data_distribution_constraint_gb)
+        target_chunk_bytes = target_chunk_size_gb * (1024**3)
 
         # Apply HDF5 4GB chunk size constraint
         max_chunk_bytes = 4 * (1024**3) - 1024  # Just under 4GB with safety margin
         target_chunk_bytes = min(target_chunk_bytes, max_chunk_bytes)
 
+        # Log constraint analysis for transparency
+        constraint_type = "memory" if memory_constraint_gb < data_distribution_constraint_gb else "data distribution"
+        print(f"CHUNKING CONSTRAINT ANALYSIS:")
+        print(f"  Memory constraint per worker: {memory_constraint_gb:.2f} GB")
+        print(f"  Data distribution constraint per worker: {data_distribution_constraint_gb:.2f} GB")
+        print(f"  Chosen constraint (bottleneck): {target_chunk_size_gb:.2f} GB ({constraint_type})")
+        print(f"  Target chunk size: {target_chunk_bytes / (1024**3):.2f} GB")
+
         # Calculate optimal chunk dimensions
-        chunk_dims, total_chunks, frames_per_chunk = self._find_optimal_chunks(
+        chunk_dims, total_chunks, frames_per_chunk = self._find_largest_factor_chunks_under_limit(
             file_shape, target_chunk_bytes, bytes_per_frame
         )
         
@@ -168,6 +178,10 @@ class AdaptiveChunkCalculator:
         chunk_size_mb = (frames_per_chunk * bytes_per_frame) / (1024**2)
         io_reduction_factor = total_frames // total_chunks if total_chunks > 0 else 1
         estimated_memory_usage_gb = (chunk_size_mb * num_workers) / 1024
+
+        # Calculate actual memory per worker for reporting
+        usable_memory_gb = available_memory_gb * self.memory_safety_factor
+        memory_per_worker_gb = usable_memory_gb / num_workers
         
         # Determine strategy type
         chunk_sy, chunk_sx = chunk_dims[:2]
@@ -240,7 +254,25 @@ class AdaptiveChunkCalculator:
                 chunk_id += 1
         
         return chunks
-    
+
+    def _calculate_memory_constraint_per_worker(self, available_memory_gb: float, num_workers: int) -> float:
+        """
+        Calculate memory-based chunk size limit per worker
+
+        This ensures we don't exceed available memory even with all workers active.
+        """
+        usable_memory_gb = available_memory_gb * self.memory_safety_factor  # e.g., 80% of available
+        memory_per_worker_gb = usable_memory_gb / num_workers
+        return memory_per_worker_gb * self.worker_memory_factor  # e.g., 70% of worker allocation
+
+    def _calculate_data_distribution_constraint_per_worker(self, file_size_gb: float, num_workers: int) -> float:
+        """
+        Calculate data-distribution-based chunk size for optimal worker utilization
+
+        This ensures all workers have roughly equal amounts of work to do.
+        """
+        return file_size_gb / num_workers
+
     def _get_available_memory_gb(self) -> float:
         """Get available system memory in GB"""
         try:
@@ -278,30 +310,37 @@ class AdaptiveChunkCalculator:
         
         return optimal_workers
     
-    def _find_optimal_chunks(self, 
-                           file_shape: Tuple[int, int, int, int],
-                           target_chunk_bytes: float,
-                           bytes_per_frame: int) -> Tuple[Tuple[int, int, int, int], int, int]:
+    def _find_largest_factor_chunks_under_limit(self,
+                                           file_shape: Tuple[int, int, int, int],
+                                           target_chunk_bytes: float,
+                                           bytes_per_frame: int) -> Tuple[Tuple[int, int, int, int], int, int]:
         """
-        Find chunk dimensions that divide evenly and fit memory constraints
-        
+        Find the largest factor-based chunks that fit under the size limit
+
+        This finds chunks that:
+        1. Divide evenly into the scan dimensions (no partial chunks)
+        2. Fit within the target chunk size limit
+        3. Are as large as possible (for efficiency) while satisfying 1 & 2
+
         Returns:
         --------
         tuple : (chunk_dims, total_chunks, frames_per_chunk)
         """
         sy, sx, qy, qx = file_shape
         total_frames = sy * sx
-        target_frames_per_chunk = int(target_chunk_bytes // bytes_per_frame)
-        
+        max_frames_per_chunk = int(target_chunk_bytes // bytes_per_frame)
+
         # Find all possible rectangular chunk dimensions that divide evenly
         valid_chunks = []
-        
+
         for chunk_sy in range(1, sy + 1):
             if sy % chunk_sy == 0:  # sy divides evenly
                 for chunk_sx in range(1, sx + 1):
                     if sx % chunk_sx == 0:  # sx divides evenly
                         frames_in_chunk = chunk_sy * chunk_sx
-                        if frames_in_chunk <= target_frames_per_chunk:
+
+                        # Only consider chunks that fit within our limit
+                        if frames_in_chunk <= max_frames_per_chunk:
                             chunk_bytes = frames_in_chunk * bytes_per_frame
                             chunks_needed = total_frames // frames_in_chunk
                             valid_chunks.append({
@@ -310,15 +349,25 @@ class AdaptiveChunkCalculator:
                                 'bytes': chunk_bytes,
                                 'count': chunks_needed
                             })
-        
+
         if not valid_chunks:
-            # Fallback to frame-based if no valid chunks found
+            # Fallback to frame-based if no valid factor chunks found
+            print(f"  WARNING: No factor-based chunks found, falling back to single frames")
             return (1, 1, qy, qx), total_frames, 1
-        
-        # Sort by frames per chunk (descending) - prefer larger chunks within memory limit
+
+        # Choose the largest valid chunks (most efficient processing)
+        # This maximizes chunk size while respecting our constraints
         valid_chunks.sort(key=lambda x: x['frames'], reverse=True)
         best_chunk = valid_chunks[0]
-        
+
+        print(f"  Selected chunk size: {best_chunk['frames']:,} frames ({best_chunk['bytes'] / (1024**3):.2f} GB)")
+        print(f"  Chunk dimensions: ({best_chunk['dims'][0]}, {best_chunk['dims'][1]})")
+        print(f"  Total chunks: {best_chunk['count']}")
+
+        # Worker utilization analysis
+        worker_efficiency = min(1.0, best_chunk['count'] / 10)  # Assuming ~10 workers
+        print(f"  Worker utilization: {worker_efficiency*100:.0f}% ({min(best_chunk['count'], 10)} of 10 workers active)")
+
         return best_chunk['dims'], best_chunk['count'], best_chunk['frames']
     
     def _single_thread_strategy(self, 
