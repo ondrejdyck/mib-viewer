@@ -283,8 +283,14 @@ class MibToEmdConverter:
     
     def calculate_optimal_chunk_size(self, file_shape: Tuple[int, int, int, int], available_memory: int, processing_factor: int = 3) -> Tuple[int, int, int, int]:
         """
-        Calculate optimal chunk size that fits in memory with processing overhead
-        
+        Calculate optimal chunk size using factor-based approach for even load balancing
+
+        This algorithm:
+        1. Preserves full detector dimensions (no chunking in detector space)
+        2. Uses only factors that divide evenly into scan dimensions
+        3. Targets optimal chunks per worker for good parallelization
+        4. Validates memory constraints per chunk
+
         Parameters:
         -----------
         file_shape : tuple
@@ -293,40 +299,81 @@ class MibToEmdConverter:
             Available memory in bytes
         processing_factor : int
             Memory multiplication factor for processing overhead (default: 3)
-            
+
         Returns:
         --------
         tuple : Optimal chunk size (chunk_sy, chunk_sx, qy, qx)
         """
+        import psutil
+
         sy, sx, qy, qx = file_shape
         bytes_per_element = 2  # uint16
-        
-        # Target chunk memory: use 20% of available RAM for chunk
-        target_chunk_memory = available_memory * 0.2
-        
-        # Account for processing overhead
-        safe_chunk_memory = target_chunk_memory // processing_factor
-        
-        # Calculate maximum frames that fit in chunk
-        bytes_per_frame = qy * qx * bytes_per_element
-        max_frames_per_chunk = max(1, int(safe_chunk_memory // bytes_per_frame))
-        
-        # Calculate chunk dimensions in scan space
-        # Try to make chunks roughly square in scan dimensions
-        chunk_sy = min(sy, max(1, int(max_frames_per_chunk ** 0.5)))
-        chunk_sx = min(sx, max_frames_per_chunk // chunk_sy)
-        
-        # Ensure we don't exceed the data dimensions
-        chunk_sy = min(chunk_sy, sy)
-        chunk_sx = min(chunk_sx, sx)
-        
-        chunk_size = (chunk_sy, chunk_sx, qy, qx)
-        chunk_memory = chunk_sy * chunk_sx * bytes_per_frame * processing_factor
-        
-        self.log(f"Calculated chunk size: {chunk_size}")
+
+        # Step 1: Calculate target frames per worker
+        total_frames = sy * sx
+        available_workers = max(1, psutil.cpu_count() - 2)  # Leave 2 cores for system
+        target_frames_per_worker = total_frames // available_workers
+
+        self.log(f"Total frames: {total_frames:,}, Workers: {available_workers}, Target per worker: {target_frames_per_worker:,}")
+
+        # Step 2: Find all factors that divide evenly into scan dimensions
+        def get_factors(n):
+            return [i for i in range(1, n + 1) if n % i == 0]
+
+        sy_factors = get_factors(sy)
+        sx_factors = get_factors(sx)
+
+        # Step 3: Find best factor combination that is ≤ target frames per worker (memory safety priority)
+        best_chunk = None
+        best_frames_per_chunk = 0  # Track largest chunk that fits under target
+        best_total_chunks = 0
+
+        for chunk_sy in sy_factors:
+            for chunk_sx in sx_factors:
+                frames_per_chunk = chunk_sy * chunk_sx
+
+                # Calculate total number of chunks this would create
+                total_chunks = (sy // chunk_sy) * (sx // chunk_sx)
+
+                # Memory validation: ensure chunk fits in per-worker budget
+                bytes_per_frame = qy * qx * bytes_per_element
+                chunk_memory = frames_per_chunk * bytes_per_frame * processing_factor
+                per_worker_memory = available_memory // available_workers
+
+                if chunk_memory > per_worker_memory:
+                    continue  # Skip chunks that are too large
+
+                # MEMORY SAFETY: Only consider chunks ≤ target (never exceed target)
+                if frames_per_chunk <= target_frames_per_worker:
+                    # Among valid chunks, choose the largest one (closest to target from below)
+                    if frames_per_chunk > best_frames_per_chunk:
+                        best_frames_per_chunk = frames_per_chunk
+                        best_chunk = (chunk_sy, chunk_sx, qy, qx)
+                        best_total_chunks = total_chunks
+
+        # Step 4: Fallback to frame-based chunking if no valid factors found
+        if best_chunk is None:
+            self.log("Warning: No valid factor-based chunks found, falling back to frame-based chunking")
+            best_chunk = (1, 1, qy, qx)
+            best_total_chunks = total_frames
+
+        # Step 5: Log results
+        chunk_sy, chunk_sx, _, _ = best_chunk
+        frames_per_chunk = chunk_sy * chunk_sx
+        chunk_memory = frames_per_chunk * qy * qx * bytes_per_element * processing_factor
+
+        self.log(f"Memory-safe chunk size: {best_chunk}")
+        self.log(f"Frames per chunk: {frames_per_chunk:,} (target was {target_frames_per_worker:,})")
+        self.log(f"Total chunks: {best_total_chunks}")
         self.log(f"Estimated chunk memory: {chunk_memory / (1024**2):.1f} MB")
-        
-        return chunk_size
+        self.log(f"Load distribution: {best_total_chunks} chunks across {available_workers} workers")
+
+        # Log safety information
+        if frames_per_chunk < target_frames_per_worker:
+            safety_margin = target_frames_per_worker - frames_per_chunk
+            self.log(f"Memory safety: Using {safety_margin:,} fewer frames per chunk for safety")
+
+        return best_chunk
     
     def chunked_mib_reader(self, mib_path: str, scan_size: Tuple[int, int], chunk_size: Tuple[int, int, int, int]):
         """
@@ -444,47 +491,26 @@ class MibToEmdConverter:
     def determine_optimal_chunks(self, shape_4d: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         """
         Determine optimal chunk size based on data shape and threading strategy
-        
-        Uses frame-based chunking (1, 1, qy, qx) for optimal threading performance.
-        Compression benchmark shows <5% penalty vs larger chunks but enables 
-        perfect parallelization for future multithreading.
-        
+
+        Uses factor-based chunking for optimal worker load balancing and parallelization.
+        Preserves full detector dimensions and distributes work evenly across available workers.
+
         Parameters:
         -----------
         shape_4d : tuple
             4D data shape (sy, sx, qy, qx)
-            
+
         Returns:
         --------
         tuple : Optimal chunk size
         """
         if self.chunk_size is not None:
             return self.chunk_size
-        
-        sy, sx, qy, qx = shape_4d
-        
-        # Frame-based chunking for threading optimization
-        # Each chunk = one detector frame at one scan position
-        chunk_sy = 1
-        chunk_sx = 1 
-        chunk_qy = qy  # Full detector height
-        chunk_qx = qx  # Full detector width
-        
-        # Handle edge cases for processed data
-        if chunk_qy == 0 or chunk_qx == 0:
-            # Fallback to minimal valid chunks
-            chunk_qy = max(1, qy)
-            chunk_qx = max(1, qx)
-        
-        chunks = (chunk_sy, chunk_sx, chunk_qy, chunk_qx)
-        
-        # Calculate chunk size for logging
-        bytes_per_pixel = 2  # uint16
-        chunk_mb = (chunk_sy * chunk_sx * chunk_qy * chunk_qx * bytes_per_pixel) / (1024**2)
-        
-        self.log(f"  Frame-based chunks: {chunks} (~{chunk_mb:.2f} MB per chunk)")
-        self.log(f"  Threading-optimized for future multithreading")
-        return chunks
+
+        # Use the improved factor-based algorithm
+        import psutil
+        available_memory = psutil.virtual_memory().available
+        return self.calculate_optimal_chunk_size(shape_4d, available_memory)
     
     def convert_to_emd(self, input_path: str, output_path: str, metadata_extra: Optional[Dict] = None, processing_options: Optional[Dict] = None) -> Dict[str, Any]:
         """
@@ -536,7 +562,7 @@ class MibToEmdConverter:
         start_time = time.time()
         
         if file_type == 'mib':
-            data_4d = load_mib(input_path, metadata['scan_size'])
+            data_4d = load_mib(input_path)
         else:  # emd
             data_4d = load_emd(input_path)
         

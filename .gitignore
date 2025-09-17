@@ -72,5 +72,5 @@ test_outputs/
 Example*4D/
 Example*EELS*/
 
-# Conversation and development files
-CONVERSATION_SUMMARY.md
+# Development notes (private, not for repo)
+NOTES.md

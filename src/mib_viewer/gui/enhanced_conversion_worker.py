@@ -17,8 +17,8 @@ Key Enhancements:
 import time
 from PyQt5.QtCore import QObject, pyqtSignal
 
-# Import our enhanced components
-from ..io.enhanced_converter import EnhancedMibEmdConverter
+# Import our fixed original adaptive converter (restored parallelization)
+from ..io.adaptive_converter import AdaptiveMibEmdConverter
 from ..io.mib_loader import get_data_file_info
 
 
@@ -92,24 +92,28 @@ class EnhancedConversionWorker(QObject):
         self._current_stage = 'analysis'
         self._conversion_start_time = None
         
-        # Create enhanced converter
-        self.converter = EnhancedMibEmdConverter(
+        # Create fixed original adaptive converter (restored parallelization)
+        self.converter = AdaptiveMibEmdConverter(
             compression=compression,
             compression_level=compression_level,
             max_workers=max_workers,
-            progress_callback=self._pipeline_progress_callback
+            progress_callback=self._pipeline_progress_callback,
+            log_callback=self.qt_safe_log,
+            verbose=True  # Enable detailed logging for GUI
         )
     
     def qt_safe_log(self, message, level="INFO"):
         """Qt-safe logging that emits signal instead of direct callback"""
+        # Always emit to GUI log - this is the primary purpose
         self.log_message_signal.emit(message, level)
         
-        # Also call original callback if provided
+        # Also call original callback if provided (for backward compatibility)
         if self.log_callback:
             try:
                 self.log_callback(message)
             except Exception:
                 pass  # Don't let callback errors break the conversion
+                
     
     def cancel(self):
         """Cancel the conversion process"""
@@ -143,8 +147,8 @@ class EnhancedConversionWorker(QObject):
             self._current_stage = 'conversion'
             self._update_overall_progress(15, "Starting enhanced conversion...")
             
-            # Run conversion with our enhanced converter
-            stats = self.converter.convert(
+            # Run conversion with our adaptive converter
+            stats = self.converter.convert_to_emd(
                 self.input_path,
                 self.output_path,
                 processing_options=self.processing_options
