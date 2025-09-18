@@ -479,18 +479,27 @@ class AdaptiveMibEmdConverter:
             datacubes_group = data_group.create_group('datacubes')
             datacube_group = datacubes_group.create_group('datacube_000')
             
+            # Determine appropriate dtype based on processing options (like single-threaded converter)
+            if processing_options and processing_options.get('bin_factor', 1) > 1:
+                # Mean binning produces float values - use appropriate dtype
+                output_dtype = np.float32  # More memory efficient than float64
+                self.log(f"Using float32 dtype for mean binning (bin_factor={processing_options.get('bin_factor', 1)})")
+            else:
+                output_dtype = np.uint16
+                self.log(f"Using uint16 dtype (no binning)")
+
             # Create main dataset with adaptive chunking
             compression_opts = {}
             if self.compression:
                 compression_opts['compression'] = self.compression
                 if self.compression == 'gzip':
                     compression_opts['compression_opts'] = self.compression_level
-            
+
             dataset = datacube_group.create_dataset(
                 'data',
                 shape=(sy, sx, qy, qx),
                 chunks=processed_chunk_dims,
-                dtype=np.uint16,
+                dtype=output_dtype,
                 **compression_opts
             )
             
@@ -752,12 +761,12 @@ class AdaptiveMibEmdConverter:
             ('header', np.bytes_, mib_props.headsize),
             ('data', mib_props.pixeltype, mib_props.merlin_size)
         ])
+
         
+
         # Read frames for this chunk
         with open(input_path, 'rb') as f:
-            # Skip to data section
-            f.seek(384)  # Skip MIB header
-            
+
             for chunk_y in range(actual_sy):
                 for chunk_x in range(actual_sx):
                     # Calculate global frame position
@@ -765,15 +774,16 @@ class AdaptiveMibEmdConverter:
                     global_x = sx_slice.start + chunk_x
                     frame_index = global_y * chunk_info.expected_shape[1] + global_x  # Assuming full scan width
                     
-                    # Seek to frame
+                    # Seek to frame (match reference loader: no MIB header skip)
                     frame_offset = frame_index * merlin_frame_dtype.itemsize
-                    f.seek(384 + frame_offset)
+                    f.seek(frame_offset)
                     
                     # Read frame
                     frame_bytes = f.read(merlin_frame_dtype.itemsize)
                     if len(frame_bytes) == merlin_frame_dtype.itemsize:
                         frame_record = np.frombuffer(frame_bytes, dtype=merlin_frame_dtype)[0]
                         frame_data = frame_record['data'].reshape(qy, qx)
+
                         chunk_data[chunk_y, chunk_x] = frame_data
         
         return chunk_data
@@ -799,6 +809,7 @@ class AdaptiveMibEmdConverter:
                 slice(0, qy_max),  # Full detector Y range based on actual data
                 slice(0, qx_max)   # Full detector X range based on actual data
             )
+
 
             hdf5_dataset[corrected_slice] = chunk_data
     
