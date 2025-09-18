@@ -2538,7 +2538,7 @@ class MibViewerPyQtGraph(QMainWindow):
             input_path, output_path, compression, compression_level,
             processing_options=processing_options,
             log_callback=self.log_message,
-            use_enhanced=True   # Use EnhancedConversionWorker with fixed AdaptiveMibEmdConverter
+            use_enhanced=True   # Back to adaptive converter for debugging
         )
         self.conversion_thread = QThread()
         
