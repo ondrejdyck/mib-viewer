@@ -385,6 +385,11 @@ def apply_data_processing(data_4d, processing_options):
     if processing_options.get('sum_y', False):
         data_4d = np.sum(data_4d, axis=2, keepdims=True)
         print(f"Applied Y-summing: {data_4d.shape}")
+
+        # For EELS data, flip energy axis to correct orientation when Y-summing
+        # This ensures EMD files store data with consistent energy axis orientation
+        data_4d = data_4d[:, :, :, ::-1]
+        print(f"Applied energy axis flip for EELS consistency")
     
     return data_4d
 

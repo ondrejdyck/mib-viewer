@@ -351,7 +351,6 @@ class AdaptiveMibEmdConverter:
         
         self.log(f"Adaptive conversion completed in {total_time:.1f}s")
         self.log(f"Achieved {chunking_result.io_reduction_factor}x I/O reduction!")
-        self.log("About to create clean result dictionary...")
         
         # Create a clean copy of the result without any problematic references
         clean_result = {
@@ -378,44 +377,34 @@ class AdaptiveMibEmdConverter:
             clean_result['total_bytes_processed'] = int(conversion_stats['total_bytes_processed'])
             
         # Clear all references to large objects safely
-        self.log("Starting cleanup of large objects...")
 
         try:
             chunk_queue = None
-            self.log("Cleared chunk_queue reference")
         except Exception as e:
             self.log(f"Warning: Error clearing chunk_queue: {str(e)}")
 
         try:
             progress_reporter = None
-            self.log("Cleared progress_reporter reference")
         except Exception as e:
             self.log(f"Warning: Error clearing progress_reporter: {str(e)}")
 
         try:
             conversion_stats = None
-            self.log("Cleared conversion_stats reference")
         except Exception as e:
             self.log(f"Warning: Error clearing conversion_stats: {str(e)}")
 
         try:
             result = None
-            self.log("Cleared result reference")
         except Exception as e:
             self.log(f"Warning: Error clearing result: {str(e)}")
 
         # Force garbage collection with error handling
         try:
-            self.log("Starting garbage collection...")
             import gc
             gc.collect()
-            self.log("Garbage collection completed")
         except Exception as e:
             self.log(f"Warning: Error during garbage collection: {str(e)}")
 
-        self.log("Cleanup completed, about to return result...")
-        self.log(f"Result keys: {list(clean_result.keys())}")
-        self.log("Attempting to return clean_result now...")
         return clean_result
     
     def _calculate_processed_shape(self,
@@ -564,7 +553,7 @@ class AdaptiveMibEmdConverter:
         try:
             hdf5_file = h5py.File(output_path, 'a')  # Keep file open
             hdf5_dataset = hdf5_file['version_1/data/datacubes/datacube_000/data']
-            hdf5_write_lock = threading.Lock()  # Still need lock for thread safety
+            hdf5_write_lock = threading.Lock()  # Restore write lock for stability
 
             # Worker function
             def worker_thread(worker_id: int):
@@ -647,7 +636,6 @@ class AdaptiveMibEmdConverter:
             # Clear dataset reference first
             try:
                 hdf5_dataset = None
-                self.log("Cleared HDF5 dataset reference")
             except Exception as e:
                 self.log(f"Warning: Error clearing HDF5 dataset: {str(e)}")
 
@@ -665,7 +653,6 @@ class AdaptiveMibEmdConverter:
             # Clear file reference
             try:
                 hdf5_file = None
-                self.log("Cleared HDF5 file reference")
             except Exception as e:
                 self.log(f"Warning: Error clearing HDF5 file reference: {str(e)}")
 
@@ -790,11 +777,10 @@ class AdaptiveMibEmdConverter:
     
     def _write_chunk_to_emd(self, output_path: str, chunk_info: ChunkInfo, chunk_data: np.ndarray,
                            hdf5_write_lock: threading.Lock, hdf5_dataset: Any):
-        """Write processed chunk to EMD file with thread safety using shared dataset"""
+        """Write processed chunk to EMD file with optional thread safety using shared dataset"""
 
-        # Only one thread can write to HDF5 file at a time
-        with hdf5_write_lock:
-            # Use the shared dataset instead of opening file each time
+        # Use write lock only if provided (for testing parallel writes)
+        def write_operation():
             # Calculate the correct output slice based on chunk_data dimensions
             # The scan dimensions (sy, sx) remain the same, but detector dimensions may change due to binning
             original_slice = chunk_info.output_slice
@@ -809,9 +795,14 @@ class AdaptiveMibEmdConverter:
                 slice(0, qy_max),  # Full detector Y range based on actual data
                 slice(0, qx_max)   # Full detector X range based on actual data
             )
-
-
             hdf5_dataset[corrected_slice] = chunk_data
+
+        # Execute with or without lock depending on test mode
+        if hdf5_write_lock is not None:
+            with hdf5_write_lock:
+                write_operation()
+        else:
+            write_operation()  # True parallel writes
     
     def _create_fixed_chunk_result(self, file_info: Dict[str, Any], chunk_size: Tuple[int, int, int, int]) -> ChunkingResult:
         """Create a chunking result for user-specified fixed chunk size"""

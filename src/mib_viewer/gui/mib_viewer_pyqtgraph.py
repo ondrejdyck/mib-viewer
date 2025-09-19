@@ -13,12 +13,12 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
                              QWidget, QPushButton, QLabel, QFileDialog, QMessageBox,
                              QMenuBar, QAction, QMenu, QStatusBar, QCheckBox, QSizePolicy,
                              QSplitter, QGroupBox, QDesktopWidget, QTabWidget, QLineEdit,
-                             QComboBox, QProgressBar, QTextEdit, QGridLayout, QFrame, 
-                             QRadioButton, QButtonGroup, QSpinBox)
+                             QComboBox, QProgressBar, QTextEdit, QGridLayout, QFrame,
+                             QRadioButton, QButtonGroup, QSpinBox, QProgressDialog)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
 
 # Import MIB loading functions
@@ -211,7 +211,12 @@ class MibViewerPyQtGraph(QMainWindow):
         # FFT ROI tracking
         self.fft_rois = {}  # Track FFT ROIs: (plot_name, window_id) -> roi_instance
         self.fft_roi_counter = 0  # Unique window IDs for FFT ROIs
-        
+
+        # Progressive loading state tracking for data loss warnings
+        self.has_unsaved_progressive_data = False
+        self.is_progressive_loading_active = False
+        self.current_progressive_data_type = None  # 'EELS' or '4D-STEM'
+
         # PyQtGraph items
         self.eels_image_item = None
         self.ndata_image_item = None
@@ -1106,7 +1111,15 @@ class MibViewerPyQtGraph(QMainWindow):
         file_menu.addAction(load_ndata_action)
         
         file_menu.addSeparator()
-        
+
+        # Save EELS as EMD option - enabled when EELS data is available
+        self.save_eels_action = QAction('Save EELS as EMD...', self)
+        self.save_eels_action.triggered.connect(self.save_eels_as_emd)
+        self.save_eels_action.setEnabled(False)  # Start disabled
+        file_menu.addAction(self.save_eels_action)
+
+        file_menu.addSeparator()
+
         exit_action = QAction('Exit', self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
@@ -1133,8 +1146,12 @@ class MibViewerPyQtGraph(QMainWindow):
             "",
             "4D STEM files (*.mib *.emd);;MIB files (*.mib);;EMD files (*.emd);;All files (*.*)"
         )
-        
+
         if not filename:
+            return
+
+        # Check for data loss warnings before loading new data
+        if not self._check_data_loss_warnings("load new data"):
             return
         
         try:
@@ -1150,12 +1167,22 @@ class MibViewerPyQtGraph(QMainWindow):
                 self.log_message(f"Loading MIB file: {os.path.basename(filename)}")
             QApplication.processEvents()
             
-            # Load the data using universal loader
+            # Check if progressive loading should be used for large EELS files
+            if file_ext == '.mib':
+                from ..io.progressive_eels_loader import should_use_progressive_loading
+                use_progressive = should_use_progressive_loading(filename, memory_threshold_gb=0.01)  # Low threshold for testing
+
+                if use_progressive:
+                    self.log_message("Large EELS file detected - using progressive loading")
+                    self._load_eels_progressively(filename, file_type)
+                    return
+
+            # Standard loading for smaller files or EMD files
             raw_data = load_data_file(filename)
-            
+
             # Log the loaded data dimensions
             self.log_message(f"Loaded data shape: {raw_data.shape} (scan_y, scan_x, detector_y, detector_x)")
-            
+
             # Detect experiment type based on data shape
             experiment_type, exp_info = detect_experiment_type(raw_data.shape)
             self.log_message(f"Detected experiment type: {experiment_type} - {exp_info['detector_type']}")
@@ -1174,11 +1201,26 @@ class MibViewerPyQtGraph(QMainWindow):
                         # dx is shorter, sum along X detector dimension (axis=3)
                         self.log_message(f"Auto-summing X detector dimension: {dy}×{dx} → {dy}×1")
                         summed_data = np.sum(raw_data, axis=3, keepdims=True)
-                    # Flip energy axis (the longer dimension becomes the energy axis)
-                    self.eels_data = summed_data[:, :, :, ::-1]
+
+                    # Energy axis flip logic depends on file type
+                    if file_type == "MIB":
+                        # MIB files: flip energy axis (raw data needs correction)
+                        self.eels_data = summed_data[:, :, :, ::-1]
+                        self.log_message("Applied energy axis flip for MIB file")
+                    else:
+                        # EMD files: no flip needed (converter already applied flip)
+                        self.eels_data = summed_data
+                        self.log_message("No energy axis flip needed for EMD file")
                 else:
-                    # 3D EELS - already summed, just flip energy axis
-                    self.eels_data = raw_data[:, :, :, ::-1]
+                    # 3D EELS - already summed, handle energy axis based on file type
+                    if file_type == "MIB":
+                        # MIB files: flip energy axis
+                        self.eels_data = raw_data[:, :, :, ::-1]
+                        self.log_message("Applied energy axis flip for MIB file")
+                    else:
+                        # EMD files: no flip needed
+                        self.eels_data = raw_data
+                        self.log_message("No energy axis flip needed for EMD file")
                 
                 self.eels_filename = os.path.basename(filename)
                 self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type})")
@@ -1201,7 +1243,14 @@ class MibViewerPyQtGraph(QMainWindow):
                 
             else:
                 # Unknown data type - default to EELS behavior for backward compatibility
-                self.eels_data = raw_data[:, :, :, ::-1]
+                if file_type == "MIB":
+                    # MIB files: flip energy axis
+                    self.eels_data = raw_data[:, :, :, ::-1]
+                    self.log_message("Applied energy axis flip for unknown MIB data type")
+                else:
+                    # EMD files: no flip needed
+                    self.eels_data = raw_data
+                    self.log_message("No energy axis flip for unknown EMD data type")
                 self.eels_filename = os.path.basename(filename)
                 self.eels_label.setText(f"Unknown Data: {self.eels_filename} ({file_type})")
                 self.tab_widget.setCurrentIndex(0)
@@ -1231,6 +1280,7 @@ class MibViewerPyQtGraph(QMainWindow):
             self.update_displays()
             self.setup_roi_positions()
             self.update_4d_displays()  # Update 4D STEM views
+            self._update_save_menu_states()  # Enable/disable save options
             self.status_bar.showMessage(f"Loaded {file_type} file: {self.eels_filename}")
             self.log_message(f"Successfully loaded {file_type} file: {self.eels_filename}", "SUCCESS")
             
@@ -1239,7 +1289,151 @@ class MibViewerPyQtGraph(QMainWindow):
             QMessageBox.critical(self, "Error", error_msg)
             self.status_bar.showMessage("Ready")
             self.log_message(error_msg, "ERROR")
-    
+
+    def _load_eels_progressively(self, filename: str, file_type: str):
+        """Load large EELS file using progressive loading"""
+        try:
+            from ..io.progressive_eels_loader import ProgressiveEELSLoader
+
+            # Initialize progressive loader
+            self.status_bar.showMessage("Initializing progressive EELS loader...")
+            self.log_message("Starting progressive loading for large EELS file...")
+            QApplication.processEvents()
+
+            # Create progress callback that just stores status - main thread will poll
+            def progress_callback(status):
+                # Just store the latest status - main thread will poll for updates
+                self._latest_progress_status = status
+
+            # Initialize loader
+            self.progressive_loader = ProgressiveEELSLoader(filename, progress_callback=progress_callback)
+            self._latest_progress_status = None
+
+            # Set progressive loading state tracking
+            self.is_progressive_loading_active = True
+            self.current_progressive_data_type = 'EELS'
+            self.has_unsaved_progressive_data = False  # Reset until loading completes
+
+            # Start loading
+            result = self.progressive_loader.start_loading()
+
+            # Create a timer to poll for updates on the main thread
+            from PyQt5.QtCore import QTimer
+            self._progress_poll_timer = QTimer()
+            self._progress_poll_timer.timeout.connect(self._poll_progressive_updates)
+            self._progress_poll_timer.start(100)  # Poll every 100ms
+
+            # Set up EELS data interface
+            self.eels_data = None  # Will be updated progressively
+            self.progressive_eels_data = self.progressive_loader.get_processed_data()
+
+            self.eels_filename = os.path.basename(filename)
+            self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type}) [Progressive]")
+
+            # Log loading info
+            self.log_message(f"Progressive loading started: {result.data_shape}")
+            self.log_message(f"Memory usage: {result.memory_usage_mb:.1f} MB")
+            self.log_message(f"Estimated time: {result.estimated_time_s:.1f}s")
+
+            # Initialize display with zero data
+            h, w = result.data_shape[:2]
+            if self.roi_mode:
+                roi_size = min(w, h) // 3
+                roi_x = (w - roi_size) // 2
+                roi_y = (h - roi_size) // 2
+                self.current_roi = (roi_x, roi_y, roi_size, roi_size, 0.0)
+            else:
+                self.current_roi = (w // 2, h // 2)
+
+            # Auto-switch to EELS tab
+            self.tab_widget.setCurrentIndex(0)
+
+            # Set up initial display
+            self.setup_roi_positions()
+            self._update_progressive_display()
+            self._update_save_menu_states()  # Enable save options when data available
+
+            self.log_message("Progressive loading initialized - display will update as data loads", "SUCCESS")
+
+        except Exception as e:
+            # Reset progressive loading state on error
+            self.is_progressive_loading_active = False
+            self.current_progressive_data_type = None
+            self.has_unsaved_progressive_data = False
+
+            error_msg = f"Failed to start progressive loading: {str(e)}"
+            QMessageBox.critical(self, "Progressive Loading Error", error_msg)
+            self.status_bar.showMessage("Ready")
+            self.log_message(error_msg, "ERROR")
+
+    def _update_progressive_display(self):
+        """Update displays with current progressive loading data"""
+        if not hasattr(self, 'progressive_loader') or not self.progressive_loader:
+            return
+
+        try:
+            # Get current processed data
+            current_data = self.progressive_loader.get_processed_data()
+            completion_mask = self.progressive_loader.get_completion_mask()
+
+            # Use progressive data as EELS data temporarily
+            self.eels_data = current_data
+
+            # Update EELS displays
+            self.update_eels_image()
+            self.update_spectrum()
+
+            # Show completion status in data
+            completed_pct = (completion_mask.sum() / completion_mask.size) * 100
+            if completed_pct >= 100:
+                # Loading complete - update state and offer to save as EMD
+                self.is_progressive_loading_active = False
+                self.has_unsaved_progressive_data = True
+
+                self.status_bar.showMessage(f"Progressive loading complete! Click 'Convert to EMD' to save processed data.")
+                self.log_message("Progressive loading completed - all regions ready", "SUCCESS")
+
+        except Exception as e:
+            self.log_message(f"Error updating progressive display: {str(e)}", "ERROR")
+
+
+    def _poll_progressive_updates(self):
+        """Poll for progressive loading updates (runs on main thread)"""
+        if not hasattr(self, '_latest_progress_status') or self._latest_progress_status is None:
+            return
+
+        if not hasattr(self, 'progressive_loader') or not self.progressive_loader:
+            return
+
+        try:
+            # Get the latest status
+            status = self._latest_progress_status
+
+            # Update GUI safely (we're on main thread)
+            progress_pct = status['progress_percent']
+            elapsed_time = status['elapsed_time']
+            completed_regions = status.get('completed_regions', 0)
+
+            self.status_bar.showMessage(
+                f"Loading EELS data: {progress_pct:.0f}% complete "
+                f"({completed_regions:.0f}% regions ready, {elapsed_time:.1f}s elapsed)"
+            )
+            self.log_message(
+                f"Progress: {status['chunks_completed']}/{status['total_chunks']} chunks "
+                f"({progress_pct:.1f}%, {elapsed_time:.1f}s elapsed)"
+            )
+
+            # Update display as data becomes available
+            self._update_progressive_display()
+
+            # Stop polling when complete
+            if status['chunks_completed'] >= status['total_chunks']:
+                if hasattr(self, '_progress_poll_timer'):
+                    self._progress_poll_timer.stop()
+
+        except Exception as e:
+            self.log_message(f"Error in polling update: {str(e)}", "ERROR")
+
     def load_ndata_file(self):
         """Load an ndata file"""
         filename, _ = QFileDialog.getOpenFileName(
@@ -1251,7 +1445,12 @@ class MibViewerPyQtGraph(QMainWindow):
         
         if not filename:
             return
-        
+
+        # Check for unsaved EELS data warnings before loading navigation data
+        if self.has_unsaved_progressive_data and self.current_progressive_data_type == 'EELS':
+            if not self._warn_unsaved_progressive_data("load navigation data"):
+                return
+
         try:
             self.status_bar.showMessage("Loading ndata file...")
             QApplication.processEvents()
@@ -2591,9 +2790,7 @@ class MibViewerPyQtGraph(QMainWindow):
         self.open_converted_btn.setEnabled(True)
 
         # Clean up thread
-        print("DEBUG: About to cleanup conversion thread...")
         self.cleanup_conversion_thread()
-        print("DEBUG: Conversion thread cleanup completed")
     
     def on_conversion_failed(self, error_message):
         """Handle conversion failure"""
@@ -2610,29 +2807,17 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def cleanup_conversion_thread(self):
         """Clean up conversion thread and reset UI state"""
-        print("DEBUG: Starting cleanup_conversion_thread")
-
         # Reset UI state
-        print("DEBUG: Resetting UI state...")
         self.convert_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
 
         # Clean up thread if it exists
-        print("DEBUG: Checking for conversion thread...")
         if hasattr(self, 'conversion_thread') and self.conversion_thread:
-            print("DEBUG: Conversion thread exists, checking if running...")
             if self.conversion_thread.isRunning():
-                print("DEBUG: Thread still running, calling quit()...")
                 self.conversion_thread.quit()
-                print("DEBUG: Waiting for thread to finish...")
                 self.conversion_thread.wait()
-                print("DEBUG: Thread finished")
-            print("DEBUG: Setting thread and worker to None...")
             self.conversion_thread = None
             self.conversion_worker = None
-            print("DEBUG: Thread cleanup complete")
-        else:
-            print("DEBUG: No conversion thread to clean up")
     
     def cancel_conversion(self):
         """Cancel the ongoing conversion"""
@@ -2674,9 +2859,9 @@ class MibViewerPyQtGraph(QMainWindow):
                 self.log_message(f"Opening converted file - Detected: {experiment_type} - {exp_info['detector_type']}")
                 
                 if experiment_type == "EELS":
-                    # Flip the energy axis for EELS data and store
-                    # After transpose, energy axis is now the last dimension (index 3) for EELS
-                    self.eels_data = raw_data[:, :, :, ::-1]
+                    # Handle energy axis for EELS data based on source
+                    # EMD files from converter already have correct energy axis orientation
+                    self.eels_data = raw_data  # No flip needed for EMD files
                     
                     self.eels_filename = os.path.basename(self.last_converted_file)
                     self.eels_label.setText(f"EELS File: {self.eels_filename} (EMD)")
@@ -2698,8 +2883,8 @@ class MibViewerPyQtGraph(QMainWindow):
                     self.tab_widget.setCurrentIndex(1)
                     
                 else:
-                    # Unknown data type - default to EELS behavior
-                    self.eels_data = raw_data[:, :, :, ::-1]
+                    # Unknown data type - default to EELS behavior (no flip for EMD)
+                    self.eels_data = raw_data
                     self.eels_filename = os.path.basename(self.last_converted_file)
                     self.eels_label.setText(f"Unknown Data: {self.eels_filename} (EMD)")
                     self.tab_widget.setCurrentIndex(0)
@@ -2727,11 +2912,13 @@ class MibViewerPyQtGraph(QMainWindow):
                 self.update_displays()
                 self.setup_roi_positions()
                 self.update_4d_displays()
-                
-                # Switch to EELS tab to show the loaded data
-                self.tab_widget.setCurrentIndex(0)
-                
-                self.status_bar.showMessage(f"Loaded converted EMD file: {self.eels_filename}")
+
+                # Status message based on experiment type
+                if experiment_type == "4D_STEM":
+                    filename = os.path.basename(self.last_converted_file)
+                    self.status_bar.showMessage(f"Loaded converted 4D STEM EMD file: {filename}")
+                else:
+                    self.status_bar.showMessage(f"Loaded converted EMD file: {self.eels_filename}")
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load converted file:\n{str(e)}")
@@ -3865,9 +4052,54 @@ Bright Field Disk Detection Results:
             center_y = max(0, min(center_y, qy - 1))
             
             return (center_y, center_x, center_y + 1, center_x + 1)
-    
+
+    def _warn_unsaved_progressive_data(self, action="close"):
+        """Show warning dialog for unsaved progressive data"""
+        reply = QMessageBox.question(
+            self,
+            "Unsaved Progressive Data",
+            f"You have unsaved {self.current_progressive_data_type} data that took time to process.\n\n"
+            f"If you {action}, this reduced data will be lost. Consider saving it as EMD first.\n\n"
+            f"Do you want to continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        return reply == QMessageBox.Yes
+
+    def _warn_active_loading(self):
+        """Show warning dialog for active progressive loading"""
+        reply = QMessageBox.question(
+            self,
+            "Progressive Loading Active",
+            f"Progressive loading is currently active for {self.current_progressive_data_type} data.\n\n"
+            "Closing now will interrupt the loading process and lose progress.\n\n"
+            "Do you want to continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        return reply == QMessageBox.Yes
+
+    def _check_data_loss_warnings(self, action="close"):
+        """Check for data loss conditions and show appropriate warnings"""
+        # Check for active progressive loading first
+        if self.is_progressive_loading_active:
+            if not self._warn_active_loading():
+                return False
+
+        # Check for unsaved progressive data
+        if self.has_unsaved_progressive_data:
+            if not self._warn_unsaved_progressive_data(action):
+                return False
+
+        return True
+
     def closeEvent(self, event):
-        """Handle application close event with proper memory cleanup"""
+        """Handle application close event with data loss warnings and proper memory cleanup"""
+        # Check for data loss warnings before closing
+        if not self._check_data_loss_warnings("close"):
+            event.ignore()
+            return
+
         try:
             self.cleanup_memory()
         except Exception as e:
@@ -3973,6 +4205,106 @@ Bright Field Disk Detection Results:
             
         except Exception as e:
             print(f"Error resetting UI state: {e}")
+
+    def save_eels_as_emd(self):
+        """Save EELS data as EMD file"""
+        if self.eels_data is None:
+            QMessageBox.warning(self, "No EELS Data", "No EELS data available to save.")
+            return
+
+        # Get output file path
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save EELS as EMD",
+            "",
+            "EMD files (*.h5 *.emd);;All files (*.*)"
+        )
+
+        if not filename:
+            return
+
+        # Ensure .h5 extension
+        if not filename.lower().endswith(('.h5', '.emd')):
+            filename += '.h5'
+
+        try:
+            # Import the EELS EMD saver
+            from ..io.eels_emd_saver import EelsEmdSaver
+
+            # Create progress dialog
+            progress_dialog = QProgressDialog("Saving EELS data as EMD...", "Cancel", 0, 0, self)
+            progress_dialog.setWindowModality(Qt.WindowModal)
+            progress_dialog.setWindowTitle("Saving EMD File")
+            progress_dialog.show()
+            QApplication.processEvents()
+
+            # Progress callback for updates
+            def progress_callback(message):
+                progress_dialog.setLabelText(message)
+                QApplication.processEvents()
+                if progress_dialog.wasCanceled():
+                    raise InterruptedError("Save operation cancelled by user")
+
+            # Create saver and save data
+            saver = EelsEmdSaver(compression='gzip', compression_level=6)
+
+            # Determine original MIB path
+            original_mib_path = ""
+            if hasattr(self, 'progressive_loader') and self.progressive_loader:
+                original_mib_path = self.progressive_loader.file_path
+            elif hasattr(self, 'eels_filename') and self.eels_filename:
+                # Try to reconstruct path (this is best effort)
+                original_mib_path = self.eels_filename
+
+            # Estimate file size
+            estimated_mb = saver.get_estimated_file_size(self.eels_data)
+            self.log_message(f"Saving EELS data as EMD (estimated size: {estimated_mb:.1f} MB)...")
+
+            # Save the data
+            success = saver.save_eels_data(
+                self.eels_data,
+                original_mib_path,
+                filename,
+                progress_callback
+            )
+
+            progress_dialog.close()
+
+            if success:
+                # Check actual file size
+                actual_size_mb = os.path.getsize(filename) / (1024**2)
+                QMessageBox.information(
+                    self,
+                    "Save Successful",
+                    f"EELS data saved successfully!\n\n"
+                    f"File: {os.path.basename(filename)}\n"
+                    f"Size: {actual_size_mb:.1f} MB\n"
+                    f"Format: EMD 1.0 (compatible with py4DSTEM)"
+                )
+                self.log_message(f"EELS data saved as EMD: {filename} ({actual_size_mb:.1f} MB)", "SUCCESS")
+
+                # Clear unsaved progressive data flag since we've successfully saved
+                self.has_unsaved_progressive_data = False
+            else:
+                QMessageBox.critical(self, "Save Failed", "Failed to save EELS data as EMD.")
+
+        except InterruptedError:
+            QMessageBox.information(self, "Save Cancelled", "Save operation was cancelled.")
+        except Exception as e:
+            progress_dialog.close()
+            error_msg = f"Error saving EELS data as EMD:\n{str(e)}"
+            QMessageBox.critical(self, "Save Error", error_msg)
+            self.log_message(f"Error saving EELS as EMD: {str(e)}", "ERROR")
+
+    def _update_save_menu_states(self):
+        """Update save menu options based on available data"""
+        # Enable/disable EELS save option
+        eels_available = self.eels_data is not None
+        if hasattr(self, 'save_eels_action'):
+            self.save_eels_action.setEnabled(eels_available)
+
+        # Log current data availability for debugging
+        self.log_message(f"Save menu updated - EELS available: {eels_available}")
 
 def main():
     """Main entry point for the PyQtGraph application"""

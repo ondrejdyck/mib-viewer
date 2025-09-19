@@ -75,3 +75,8 @@ Example*EELS*/
 # Development notes (private, not for repo)
 NOTES.md
 LARGE_FILE_LAZY_LOADING_PLAN.md
+PROGRESSIVE_EELS_IMPLEMENTATION_NOTES.md
+
+# Deprecated code and experiments (not for repo)
+deprecated_v2_files/
+experiments/
