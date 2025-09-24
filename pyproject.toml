@@ -13,6 +13,7 @@ dependencies = [
     "tqdm>=4.60.0",
     "py4dstem>=0.14.16",
     "pyqtgraph>=0.13.7",
+    "psutil>=5.8.0",  # For memory detection and system monitoring
 ]
 
 [project.scripts]

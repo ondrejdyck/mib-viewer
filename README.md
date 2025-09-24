@@ -34,11 +34,19 @@
 - Real-time spectrum visualization
 - Energy range analysis
 
-### **4D STEM Analysis** 
+### **4D STEM Analysis**
 - Virtual detector overlays (BF/DF imaging)
 - Interactive scan position navigation
 - Real-time virtual imaging updates
 - Optimized performance (300ms update delay)
+
+### **4D FFT Analysis** ✨ *NEW*
+- **Chunked 4D FFT computation** for memory-efficient processing
+- **Auto-persistent results** - compute once, use forever
+- **Three-phase optimization** - instant display with background saving
+- **Adaptive bright field detection** and cropping
+- **Interactive spatial frequency analysis** with ROI/point selectors
+- **Amplitude and phase visualization** with specialized colormaps
 
 ### **Technical Capabilities**
 - **Standalone**: No Python installation required (~80-120 MB)

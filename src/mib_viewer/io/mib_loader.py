@@ -100,9 +100,9 @@ def auto_detect_scan_size(num_frames):
     return (num_frames, 1)
 
 
-def load_mib(path_buffer, scan_size=None):
+def load_mib(path_buffer):
     """Load Quantum Detectors MIB file from a path."""
-    
+
     # Read header from the start of the file
     try:
         with open(path_buffer, 'rb') as f:
@@ -111,31 +111,27 @@ def load_mib(path_buffer, scan_size=None):
             filesize = f.tell()
     except:
         raise ValueError('File does not contain MIB header')
-    
+
     # Parse header info
     mib_prop = get_mib_properties(head)
     mib_prop.path = path_buffer
-    
+
     # Find the size of the data
     merlin_frame_dtype = np.dtype([
         ('header', np.bytes_, mib_prop.headsize),
         ('data', mib_prop.pixeltype, mib_prop.merlin_size)
     ])
     mib_prop.numberOfFramesInFile = filesize // merlin_frame_dtype.itemsize
-    
-    # Auto-detect scan size if not provided
-    if scan_size is None:
-        scan_size = auto_detect_scan_size(mib_prop.numberOfFramesInFile)
-        print(f"Auto-detected scan size: {scan_size[0]}x{scan_size[1]} from {mib_prop.numberOfFramesInFile} frames")
-    
+
+    # Always auto-detect scan size from actual frame count
+    scan_size = auto_detect_scan_size(mib_prop.numberOfFramesInFile)
+    print(f"Auto-detected scan size: {scan_size[0]}x{scan_size[1]} from {mib_prop.numberOfFramesInFile} frames")
+
     mib_prop.scan_size = scan_size
     if type(scan_size) == int:
         mib_prop.xy = scan_size
     if type(scan_size) == tuple:
         mib_prop.xy = scan_size[0] * scan_size[1]
-    
-    if mib_prop.xy > mib_prop.numberOfFramesInFile:
-        raise ValueError(f"Requested number of frames: {mib_prop.xy} exceeds available frames: {mib_prop.numberOfFramesInFile}")
     
     if mib_prop.raw:
         raise ValueError('RAW MIB data not supported.')
@@ -253,16 +249,14 @@ def load_emd(path_buffer):
         raise ValueError(f"Failed to load EMD file: {str(e)}")
 
 
-def load_data_file(path_buffer, scan_size=None):
+def load_data_file(path_buffer):
     """Universal loader that detects file type and loads appropriately.
-    
+
     Parameters:
     -----------
     path_buffer : str
         Path to the data file (.mib or .emd)
-    scan_size : tuple, optional
-        Scan size for MIB files (ignored for EMD files)
-        
+
     Returns:
     --------
     numpy.ndarray
@@ -273,7 +267,7 @@ def load_data_file(path_buffer, scan_size=None):
     if path_str.endswith('.emd'):
         return load_emd(path_buffer)
     elif path_str.endswith('.mib'):
-        return load_mib(path_buffer, scan_size)
+        return load_mib(path_buffer)
     else:
         # Try to auto-detect based on file content
         try:
@@ -282,7 +276,7 @@ def load_data_file(path_buffer, scan_size=None):
         except:
             try:
                 # Fall back to MIB
-                return load_mib(path_buffer, scan_size)
+                return load_mib(path_buffer)
             except:
                 raise ValueError(f"Cannot determine file type or load data from: {path_buffer}")
 
@@ -391,6 +385,11 @@ def apply_data_processing(data_4d, processing_options):
     if processing_options.get('sum_y', False):
         data_4d = np.sum(data_4d, axis=2, keepdims=True)
         print(f"Applied Y-summing: {data_4d.shape}")
+
+        # For EELS data, flip energy axis to correct orientation when Y-summing
+        # This ensures EMD files store data with consistent energy axis orientation
+        data_4d = data_4d[:, :, :, ::-1]
+        print(f"Applied energy axis flip for EELS consistency")
     
     return data_4d
 
