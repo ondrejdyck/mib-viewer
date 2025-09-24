@@ -13,6 +13,8 @@ import os
 import sys
 import argparse
 import time
+import json
+import zipfile
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, Callable
 import warnings
@@ -138,21 +140,32 @@ class MibToEmdConverter:
     
     def detect_file_type(self, file_path: str) -> str:
         """
-        Detect whether input file is MIB or EMD format
-        
+        Detect whether input file is MIB, EMD, or NDATA1 format
+
         Parameters:
         -----------
         file_path : str
             Path to input file
-            
+
         Returns:
         --------
-        str : 'mib' or 'emd'
+        str : 'mib', 'emd', or 'ndata1'
         """
         file_ext = os.path.splitext(file_path)[1].lower()
-        
+
         if file_ext == '.mib':
             return 'mib'
+        elif file_ext == '.ndata1':
+            # Verify it's actually a zip file with the expected structure
+            try:
+                with zipfile.ZipFile(file_path, 'r') as zf:
+                    files = zf.namelist()
+                    if 'data.npy' in files and 'metadata.json' in files:
+                        return 'ndata1'
+            except:
+                pass
+            # Fallback - assume ndata1 based on extension
+            return 'ndata1'
         elif file_ext in ['.emd', '.h5', '.hdf5']:
             # Check if it's a valid EMD file by trying to access structure
             try:
@@ -278,9 +291,72 @@ class MibToEmdConverter:
         self.log(f"  Size: {metadata['filesize_gb']:.2f} GB")
         self.log(f"  Frames: {metadata['num_frames']:,}")
         self.log(f"  Detector: {metadata['detector_size']}")
-        
+
         return metadata
-    
+
+    def process_ndata_metadata(self, ndata_metadata: Dict, data_shape: Tuple, filename: str) -> Dict[str, Any]:
+        """
+        Process already-loaded ndata metadata for EMD export
+
+        Parameters:
+        -----------
+        ndata_metadata : dict
+            Already-loaded Nion metadata from GUI
+        data_shape : tuple
+            Shape of the ndata array
+        filename : str
+            Original filename
+
+        Returns:
+        --------
+        dict : Processed metadata dictionary for EMD export
+        """
+        self.log(f"Processing ndata metadata from: {filename}")
+
+        # Extract key information from Nion metadata
+        metadata = {
+            'original_filename': filename,
+            'shape_2d': data_shape,
+            'pixel_dtype': 'float32',  # Typical ndata dtype
+            'num_pixels': data_shape[0] * data_shape[1] if len(data_shape) >= 2 else 0,
+            'scan_size': data_shape if len(data_shape) >= 2 else (1, 1),
+            'data_type': 'image',  # Distinguish from 4D STEM data
+        }
+
+        # Extract spatial calibrations
+        spatial_cals = ndata_metadata.get('spatial_calibrations', [])
+        if len(spatial_cals) >= 2:
+            metadata['spatial_calibration_x'] = spatial_cals[0]
+            metadata['spatial_calibration_y'] = spatial_cals[1]
+
+        # Extract instrument metadata if available
+        instrument_meta = ndata_metadata.get('metadata', {}).get('instrument', {})
+        if instrument_meta:
+            metadata['high_tension'] = instrument_meta.get('high_tension')
+            metadata['defocus'] = instrument_meta.get('defocus')
+
+        # Extract scan metadata
+        scan_meta = ndata_metadata.get('metadata', {}).get('scan', {})
+        if scan_meta:
+            metadata['fov_nm'] = scan_meta.get('fov_nm')
+            metadata['pixel_time_us'] = scan_meta.get('scan_device_parameters', {}).get('pixel_time_us')
+            metadata['center_x_nm'] = scan_meta.get('center_x_nm')
+            metadata['center_y_nm'] = scan_meta.get('center_y_nm')
+
+        # Store original Nion metadata for preservation
+        metadata['nion_metadata'] = ndata_metadata
+
+        # Extract title from Nion metadata
+        metadata['title'] = ndata_metadata.get('title', os.path.splitext(filename)[0])
+
+        self.log(f"  Shape: {metadata['shape_2d']}")
+        self.log(f"  Pixels: {metadata['num_pixels']:,}")
+        self.log(f"  Title: {metadata.get('title', 'N/A')}")
+        if metadata.get('fov_nm'):
+            self.log(f"  FOV: {metadata['fov_nm']} nm")
+
+        return metadata
+
     def calculate_optimal_chunk_size(self, file_shape: Tuple[int, int, int, int], available_memory: int, processing_factor: int = 3) -> Tuple[int, int, int, int]:
         """
         Calculate optimal chunk size using factor-based approach for even load balancing
@@ -487,7 +563,127 @@ class MibToEmdConverter:
                     chunk_data = dataset[chunk_slice]
                     
                     yield chunk_slice, chunk_data
-    
+
+    def _write_image_dataset(self, data_group, data_2d: np.ndarray, metadata: Dict, dataset_name: str = "image_000") -> None:
+        """
+        Write 2D image data to EMD file structure
+
+        Parameters:
+        -----------
+        data_group : h5py.Group
+            EMD data group to write into
+        data_2d : np.ndarray
+            2D image data
+        metadata : dict
+            Image metadata
+        dataset_name : str
+            Name for the image dataset (default: "image_000")
+        """
+        # Create images group if it doesn't exist
+        if 'images' not in data_group:
+            images_group = data_group.create_group('images')
+        else:
+            images_group = data_group['images']
+
+        # Create dataset group
+        image_group = images_group.create_group(dataset_name)
+        image_group.attrs['emd_group_type'] = 'array'
+
+        # Prepare compression kwargs
+        compression_kwargs = {}
+        if self.compression:
+            compression_kwargs['compression'] = self.compression
+            if self.compression_level is not None:
+                compression_kwargs['compression_opts'] = self.compression_level
+
+        # Determine optimal chunk size for 2D data
+        sy, sx = data_2d.shape
+        chunk_size = min(256, sy), min(256, sx)  # Use reasonable chunk sizes for 2D data
+
+        self.log(f"  Writing 2D image dataset: {data_2d.shape}")
+
+        # Create main dataset
+        dataset = image_group.create_dataset(
+            'data',
+            data=data_2d,
+            chunks=chunk_size,
+            **compression_kwargs
+        )
+        dataset.attrs['units'] = 'counts'
+
+        # Create dimension datasets
+        image_group.create_dataset('dim1', data=np.arange(sy))
+        image_group.create_dataset('dim2', data=np.arange(sx))
+        image_group['dim1'].attrs['name'] = 'scan_y'
+        image_group['dim1'].attrs['units'] = 'pixel'
+        image_group['dim2'].attrs['name'] = 'scan_x'
+        image_group['dim2'].attrs['units'] = 'pixel'
+
+        # Add spatial calibration if available
+        if 'spatial_calibration_x' in metadata:
+            cal_x = metadata['spatial_calibration_x']
+            image_group['dim2'].attrs['offset'] = cal_x.get('offset', 0.0)
+            image_group['dim2'].attrs['scale'] = cal_x.get('scale', 1.0)
+            if cal_x.get('units'):
+                image_group['dim2'].attrs['units'] = cal_x['units']
+
+        if 'spatial_calibration_y' in metadata:
+            cal_y = metadata['spatial_calibration_y']
+            image_group['dim1'].attrs['offset'] = cal_y.get('offset', 0.0)
+            image_group['dim1'].attrs['scale'] = cal_y.get('scale', 1.0)
+            if cal_y.get('units'):
+                image_group['dim1'].attrs['units'] = cal_y['units']
+
+        # Add dimension convention documentation
+        image_group.attrs['dimension_order'] = 'scan_y, scan_x'
+        image_group.attrs['dimension_convention'] = 'MIB Viewer format: 2D image data'
+
+    def _add_image_metadata(self, version_group, metadata: Dict, metadata_group_name: str = "nion_metadata") -> None:
+        """
+        Add image-specific metadata to EMD file
+
+        Parameters:
+        -----------
+        version_group : h5py.Group
+            EMD version_1 group
+        metadata : dict
+            Image metadata dictionary
+        metadata_group_name : str
+            Name for the metadata subgroup
+        """
+        # Get or create metadata group
+        if 'metadata' not in version_group:
+            metadata_group = version_group.create_group('metadata')
+        else:
+            metadata_group = version_group['metadata']
+
+        # Create subgroup for this metadata source
+        if metadata_group_name not in metadata_group:
+            source_group = metadata_group.create_group(metadata_group_name)
+        else:
+            source_group = metadata_group[metadata_group_name]
+
+        # Store metadata (excluding complex objects)
+        for key, value in metadata.items():
+            if key == 'nion_metadata':
+                # Store original Nion metadata as JSON string
+                try:
+                    source_group.attrs['original_nion_metadata'] = json.dumps(value, default=str)
+                except:
+                    pass  # Skip if can't serialize
+            elif value is not None:
+                try:
+                    if isinstance(value, (str, int, float, bool)):
+                        source_group.attrs[key] = value
+                    elif isinstance(value, (list, tuple)):
+                        source_group.attrs[key] = list(value)
+                    elif isinstance(value, dict):
+                        # Store simple dicts as JSON strings
+                        source_group.attrs[f"{key}_json"] = json.dumps(value, default=str)
+                except Exception:
+                    # Skip metadata that can't be stored as HDF5 attributes
+                    pass
+
     def determine_optimal_chunks(self, shape_4d: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         """
         Determine optimal chunk size based on data shape and threading strategy
@@ -540,15 +736,19 @@ class MibToEmdConverter:
         # Analyze input file based on type
         if file_type == 'mib':
             metadata = self.analyze_mib_file(input_path)
+        elif file_type == 'ndata1':
+            # For now, ndata1 files should be processed through the GUI export functionality
+            raise ValueError("NDATA1 files should be loaded in the GUI and exported using export_display_data()")
         else:  # emd
             metadata = self.analyze_emd_file(input_path)
             
         if metadata_extra:
             metadata.update(metadata_extra)
         
-        # Check if chunked processing is needed
+        # Handle 4D STEM data (mib/emd files)
+        # Note: ndata1 files should use export_display_data() method instead
         use_chunked = self.should_use_chunked_mode(input_path, metadata['shape_4d'])
-        
+
         if use_chunked:
             return self._convert_chunked(input_path, output_path, file_type, metadata, processing_options)
         else:
@@ -563,6 +763,9 @@ class MibToEmdConverter:
         
         if file_type == 'mib':
             data_4d = load_mib(input_path)
+        elif file_type == 'ndata1':
+            # This shouldn't happen since ndata1 goes to _convert_2d_image
+            raise ValueError("NDATA1 files should use _convert_2d_image method")
         else:  # emd
             data_4d = load_emd(input_path)
         
@@ -679,7 +882,190 @@ class MibToEmdConverter:
         self.update_progress(100, "Chunked conversion completed!")
         
         return self._calculate_conversion_stats(input_path, output_path, load_time, write_time)
-    
+
+    def export_display_data(self, output_path: str, display_data: Dict, metadata_extra: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        Export display data from the GUI to EMD format
+        Supports: HAADF only, EELS only, or combined HAADF+EELS
+
+        Parameters:
+        -----------
+        output_path : str
+            Path to output EMD file
+        display_data : dict
+            Dictionary containing the display data with keys:
+            - 'haadf_data': 2D numpy array (optional)
+            - 'haadf_metadata': metadata dict (optional)
+            - 'eels_data': 4D numpy array (optional)
+            - 'eels_metadata': metadata dict (optional)
+        metadata_extra : dict, optional
+            Additional metadata to include
+
+        Returns:
+        --------
+        dict : Export statistics
+        """
+        self.log(f"\nExporting display data to EMD: {os.path.basename(output_path)}")
+        self.update_progress(5, "Analyzing display data...")
+
+        # Extract data components
+        haadf_data = display_data.get('haadf_data')
+        haadf_metadata = display_data.get('haadf_metadata', {})
+        eels_data = display_data.get('eels_data')
+        eels_metadata = display_data.get('eels_metadata', {})
+
+        # Validate we have at least some data
+        if haadf_data is None and eels_data is None:
+            raise ValueError("No data provided for export. Must have either HAADF or EELS data.")
+
+        # Determine export scenario
+        has_haadf = haadf_data is not None
+        has_eels = eels_data is not None
+
+        if has_haadf and has_eels:
+            self.log("  Export type: Combined HAADF + EELS")
+            export_type = "combined"
+        elif has_haadf:
+            self.log("  Export type: HAADF only")
+            export_type = "haadf_only"
+        else:
+            self.log("  Export type: EELS only")
+            export_type = "eels_only"
+
+        start_time = time.time()
+
+        # Create EMD file with appropriate structure
+        self.update_progress(20, f"Creating EMD file ({export_type})...")
+
+        with h5py.File(output_path, 'w') as f:
+            # Create EMD 1.0 root structure
+            f.attrs['emd_group_type'] = 'file'
+            f.attrs['version_major'] = 1
+            f.attrs['version_minor'] = 0
+            f.attrs['authoring_program'] = 'mib-to-emd-converter'
+
+            version_group = f.create_group('version_1')
+            version_group.attrs['emd_group_type'] = 'root'
+
+            # Data group
+            data_group = version_group.create_group('data')
+
+            # Add EELS data if present (4D datacube)
+            if has_eels:
+                self.log(f"  Adding EELS datacube: {eels_data.shape}")
+                datacubes_group = data_group.create_group('datacubes')
+                datacube_group = datacubes_group.create_group('datacube_000')
+                datacube_group.attrs['emd_group_type'] = 'array'
+
+                # Determine chunking for 4D data
+                chunks = self.determine_optimal_chunks(eels_data.shape)
+
+                # Prepare compression
+                compression_kwargs = {}
+                if self.compression:
+                    compression_kwargs['compression'] = self.compression
+                    if self.compression_level is not None:
+                        compression_kwargs['compression_opts'] = self.compression_level
+
+                # Create EELS dataset
+                dataset = datacube_group.create_dataset(
+                    'data',
+                    data=eels_data,
+                    chunks=chunks,
+                    **compression_kwargs
+                )
+                dataset.attrs['units'] = 'counts'
+
+                # Add 4D dimensions
+                sy, sx, qy, qx = eels_data.shape
+                datacube_group.create_dataset('dim1', data=np.arange(sy))
+                datacube_group.create_dataset('dim2', data=np.arange(sx))
+                datacube_group.create_dataset('dim3', data=np.arange(qy))
+                datacube_group.create_dataset('dim4', data=np.arange(qx))
+
+                for i, (dim_name, units) in enumerate([('scan_y', 'pixel'), ('scan_x', 'pixel'),
+                                                     ('detector_y', 'pixel'), ('detector_x', 'pixel')], 1):
+                    datacube_group[f'dim{i}'].attrs['name'] = dim_name
+                    datacube_group[f'dim{i}'].attrs['units'] = units
+
+                datacube_group.attrs['dimension_order'] = 'scan_y, scan_x, detector_y, detector_x'
+                datacube_group.attrs['dimension_convention'] = 'MIB Viewer format: EELS energy in detector_x dimension'
+
+            # Add HAADF data if present (2D image)
+            if has_haadf:
+                self.log(f"  Adding HAADF image: {haadf_data.shape}")
+                self._write_image_dataset(data_group, haadf_data, haadf_metadata, "image_000")
+
+            # Add metadata
+            metadata_group = version_group.create_group('metadata')
+
+            # Add EELS metadata if present
+            if has_eels and eels_metadata:
+                eels_meta_group = metadata_group.create_group('eels_metadata')
+                for key, value in eels_metadata.items():
+                    if value is not None:
+                        try:
+                            if isinstance(value, (str, int, float)):
+                                eels_meta_group.attrs[key] = value
+                            elif isinstance(value, (list, tuple)):
+                                eels_meta_group.attrs[key] = list(value)
+                        except:
+                            pass
+
+            # Add HAADF metadata if present
+            if has_haadf and haadf_metadata:
+                self._add_image_metadata(version_group, haadf_metadata, "haadf_metadata")
+
+            # Add extra metadata if provided
+            if metadata_extra:
+                extra_group = metadata_group.create_group('additional_metadata')
+                for key, value in metadata_extra.items():
+                    if value is not None:
+                        try:
+                            if isinstance(value, (str, int, float)):
+                                extra_group.attrs[key] = value
+                            elif isinstance(value, (list, tuple)):
+                                extra_group.attrs[key] = list(value)
+                        except:
+                            pass
+
+            # Log group
+            log_group = version_group.create_group('log')
+            log_group.attrs['conversion_date'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            log_group.attrs['converter_version'] = '1.0'
+            log_group.attrs['export_type'] = export_type
+            log_group.attrs['compression_algorithm'] = self.compression or 'none'
+            if self.compression_level:
+                log_group.attrs['compression_level'] = self.compression_level
+
+        write_time = time.time() - start_time
+        self.update_progress(100, "Display data export completed!")
+
+        # Calculate simple statistics (no input file to compare against)
+        output_size = os.path.getsize(output_path)
+        total_data_size = 0
+        if has_haadf:
+            total_data_size += haadf_data.nbytes
+        if has_eels:
+            total_data_size += eels_data.nbytes
+
+        stats = {
+            'export_type': export_type,
+            'output_size_gb': output_size / (1024**3),
+            'data_size_gb': total_data_size / (1024**3),
+            'compression_ratio': total_data_size / output_size if output_size > 0 else 1.0,
+            'write_time_s': write_time,
+            'total_time_s': write_time
+        }
+
+        self.log(f"\nDisplay data export completed!")
+        self.log(f"  Export type: {export_type}")
+        self.log(f"  Output size: {stats['output_size_gb']:.2f} GB")
+        self.log(f"  Compression ratio: {stats['compression_ratio']:.1f}x")
+        self.log(f"  Export time: {stats['total_time_s']:.1f}s")
+
+        return stats
+
     def _add_emd_metadata(self, datacube_group, version_group, metadata: Dict):
         """Add EMD metadata structure to the file"""
         # Create dimension datasets
@@ -904,7 +1290,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    parser.add_argument('input_file', help='Input MIB or EMD file path')
+    parser.add_argument('input_file', help='Input MIB, EMD, or NDATA1 file path')
     parser.add_argument('output_emd', help='Output EMD file path (.emd extension recommended)')
     
     # Processing options
