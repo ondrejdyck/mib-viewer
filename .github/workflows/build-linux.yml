@@ -6,7 +6,7 @@ on:
       ubuntu_version:
         description: 'Ubuntu version to build on'
         required: false
-        default: 'ubuntu-20.04'
+        default: 'ubuntu-22.04'
         type: choice
         options:
           - ubuntu-20.04
