@@ -24,12 +24,15 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
 # Import MIB loading functions
 try:
     # Try relative import (when run as module)
-    from ..io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info, 
+    from ..io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
                                      get_mib_properties, auto_detect_scan_size, MibProperties,
                                      detect_experiment_type, apply_data_processing, calculate_processed_size,
                                      get_valid_bin_factors)
     from ..io.mib_to_emd_converter import MibToEmdConverter
     from .enhanced_conversion_worker import ConversionWorkerFactory
+    from ..io.chunked_fft_processor import (
+        Chunked4DFFTProcessor, FFTMode, create_chunked_fft_processor
+    )
 except ImportError:
     # Fall back for direct execution
     from mib_viewer.io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
@@ -38,6 +41,9 @@ except ImportError:
                                           get_valid_bin_factors)
     from mib_viewer.io.mib_to_emd_converter import MibToEmdConverter
     from mib_viewer.gui.enhanced_conversion_worker import ConversionWorkerFactory
+    from mib_viewer.io.chunked_fft_processor import (
+        Chunked4DFFTProcessor, FFTMode, create_chunked_fft_processor
+    )
 
 # Configure PyQtGraph
 pg.setConfigOptions(antialias=True, useOpenGL=True)
@@ -183,7 +189,10 @@ class MibViewerPyQtGraph(QMainWindow):
     """
     High-performance MIB EELS viewer using PyQtGraph for real-time interactions
     """
-    
+
+    # Define signals for thread-safe background operations
+    background_progress_updated = pyqtSignal(int, str)  # progress percentage, status message
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MIB EELS Viewer - PyQtGraph")
@@ -196,6 +205,7 @@ class MibViewerPyQtGraph(QMainWindow):
         self.ndata_data = None
         self.eels_filename = ""
         self.ndata_filename = ""
+        self.stem4d_filename = ""
         
         # Current selections
         self.current_roi = None  # Will store ROI bounds
@@ -228,8 +238,11 @@ class MibViewerPyQtGraph(QMainWindow):
         # Settings
         self.log_scale = False
         self.roi_mode = True  # True = rectangle ROI, False = crosshair
-        
+
         self.setup_ui()
+
+        # Connect background progress signal (thread-safe)
+        self.background_progress_updated.connect(self.on_background_progress)
     
     def center_on_screen(self):
         """Center the main window on the screen"""
@@ -262,11 +275,24 @@ class MibViewerPyQtGraph(QMainWindow):
         file_info_widget = QWidget()
         file_info_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         file_info_layout = QHBoxLayout(file_info_widget)
+
+        # Left side: EELS and ndata files (stacked vertically)
+        left_files_widget = QWidget()
+        left_files_layout = QVBoxLayout(left_files_widget)
+        left_files_layout.setContentsMargins(0, 0, 0, 0)
+        left_files_layout.setSpacing(2)
         self.eels_label = QLabel("EELS File: None loaded")
         self.ndata_label = QLabel("ndata File: None loaded")
-        file_info_layout.addWidget(self.eels_label)
+        left_files_layout.addWidget(self.eels_label)
+        left_files_layout.addWidget(self.ndata_label)
+
+        # Right side: 4D STEM file
+        self.stem4d_label = QLabel("4D STEM File: None loaded")
+
+        # Add to main layout
+        file_info_layout.addWidget(left_files_widget)
         file_info_layout.addStretch()
-        file_info_layout.addWidget(self.ndata_label)
+        file_info_layout.addWidget(self.stem4d_label)
         main_layout.addWidget(file_info_widget)
         
         # Create main splitter for tabs and log panel
@@ -568,18 +594,35 @@ class MibViewerPyQtGraph(QMainWindow):
         # FFT Controls group
         fft_controls_group = QGroupBox("FFT Controls")
         fft_controls_layout = QVBoxLayout(fft_controls_group)
-        
-        # Estimate FFT size button
-        self.estimate_fft_btn = QPushButton("Estimate FFT Size")
+
+        # FFT Mode Selection
+        mode_group = QGroupBox("FFT Mode")
+        mode_layout = QVBoxLayout(mode_group)
+
+        self.fft_mode_cropped = QRadioButton("Cropped FFT (BF region only - faster)")
+        self.fft_mode_full = QRadioButton("Full FFT (entire detector - comprehensive)")
+        self.fft_mode_cropped.setChecked(True)  # Default to cropped for compatibility
+
+        # Group radio buttons
+        self.fft_mode_group = QButtonGroup()
+        self.fft_mode_group.addButton(self.fft_mode_cropped, 0)
+        self.fft_mode_group.addButton(self.fft_mode_full, 1)
+
+        mode_layout.addWidget(self.fft_mode_cropped)
+        mode_layout.addWidget(self.fft_mode_full)
+        fft_controls_layout.addWidget(mode_group)
+
+        # Estimate FFT requirements button
+        self.estimate_fft_btn = QPushButton("Estimate FFT Requirements")
         self.estimate_fft_btn.clicked.connect(self.estimate_fft_size)
-        self.estimate_fft_btn.setToolTip("Detect bright field disk and estimate memory requirements")
+        self.estimate_fft_btn.setToolTip("Estimate FFT requirements for selected mode (cropped/full)")
         self.estimate_fft_btn.setEnabled(False)  # Initially disabled until data is loaded
         fft_controls_layout.addWidget(self.estimate_fft_btn)
         
         # Compute FFT button (initially disabled)
-        self.compute_fft_btn = QPushButton("Compute Spatial FFT")
+        self.compute_fft_btn = QPushButton("Compute FFT")
         self.compute_fft_btn.clicked.connect(self.compute_4d_fft)
-        self.compute_fft_btn.setToolTip("Compute spatial frequency FFT (FFT across scan dimensions)")
+        self.compute_fft_btn.setToolTip("Compute 4D FFT using selected mode (replaces any existing FFT)")
         self.compute_fft_btn.setEnabled(False)  # Disabled until estimation is done
         fft_controls_layout.addWidget(self.compute_fft_btn)
         
@@ -613,6 +656,12 @@ class MibViewerPyQtGraph(QMainWindow):
         self.fft_info_label.setStyleSheet("color: #666; font-size: 10px;")
         self.fft_info_label.setWordWrap(True)
         info_layout.addWidget(self.fft_info_label)
+
+        # Background progress bar (initially hidden)
+        self.background_progress_bar = QProgressBar()
+        self.background_progress_bar.setVisible(False)
+        self.background_progress_bar.setStyleSheet("QProgressBar { font-size: 9px; }")
+        info_layout.addWidget(self.background_progress_bar)
         
         controls_layout.addWidget(info_group)
         controls_layout.addStretch()
@@ -1177,6 +1226,10 @@ class MibViewerPyQtGraph(QMainWindow):
                     self._load_eels_progressively(filename, file_type)
                     return
 
+                # Check memory requirements for 4D STEM datasets
+                if not self._check_4dstem_memory_requirements(filename):
+                    return  # User cancelled or chose to convert
+
             # Standard loading for smaller files or EMD files
             raw_data = load_data_file(filename)
 
@@ -1231,13 +1284,19 @@ class MibViewerPyQtGraph(QMainWindow):
             elif experiment_type == "4D_STEM":
                 # Store as 4D STEM data (no energy axis flip needed)
                 self.stem4d_data = raw_data
-                
+                self.stem4d_filename = filename  # Store full path for EMD processing
+
+                # Update the 4D STEM file label
+                self.stem4d_label.setText(f"4D STEM File: {os.path.basename(filename)} ({file_type})")
+
                 # Update FFT memory estimate
                 self.update_fft_memory_estimate()
-                
-                # TODO: Add 4D STEM file label to the 4D STEM tab
+
+                # Check for existing FFT data and auto-load if available
+                self.auto_detect_and_load_fft()
+
                 self.log_message(f"Loaded 4D STEM data: {os.path.basename(filename)} ({file_type})")
-                
+
                 # Auto-switch to 4D STEM tab
                 self.tab_widget.setCurrentIndex(1)  # 4D STEM is second tab
                 
@@ -2764,7 +2823,26 @@ class MibViewerPyQtGraph(QMainWindow):
         """Handle progress updates from conversion worker"""
         self.conversion_progress.setValue(progress)
         self.conversion_status.setText(status)
-    
+
+    def on_background_progress(self, progress, message):
+        """Handle background FFT progress updates (thread-safe)"""
+        # Show progress bar if not visible
+        if not self.background_progress_bar.isVisible():
+            self.background_progress_bar.setVisible(True)
+            self.background_progress_bar.setValue(0)
+
+        # Update progress percentage
+        self.background_progress_bar.setValue(progress)
+
+        # Update progress text
+        display_text = message.split("Background: ")[-1] if "Background: " in message else message
+        self.background_progress_bar.setFormat(display_text)
+
+        # Handle completion
+        if "completed" in message.lower():
+            # Hide progress bar after a short delay
+            QTimer.singleShot(2000, lambda: self.background_progress_bar.setVisible(False))
+
     def on_conversion_finished(self, stats):
         """Handle successful completion of conversion"""
         output_path = self.conversion_worker.output_path
@@ -2872,13 +2950,20 @@ class MibViewerPyQtGraph(QMainWindow):
                 elif experiment_type == "4D_STEM":
                     # Store as 4D STEM data (no energy axis flip needed)
                     self.stem4d_data = raw_data
-                    
+                    self.stem4d_filename = self.last_converted_file  # Store full path for EMD processing
+
+                    # Update the 4D STEM file label
+                    self.stem4d_label.setText(f"4D STEM File: {os.path.basename(self.last_converted_file)} (EMD)")
+
                     # Update FFT memory estimate
                     self.update_fft_memory_estimate()
-                    
+
+                    # Check for existing FFT data and auto-load if available
+                    self.auto_detect_and_load_fft()
+
                     # Log 4D STEM file loading
                     self.log_message(f"Opened converted 4D STEM data: {os.path.basename(self.last_converted_file)} (EMD)")
-                    
+
                     # Auto-switch to 4D STEM tab
                     self.tab_widget.setCurrentIndex(1)
                     
@@ -3146,158 +3231,296 @@ class MibViewerPyQtGraph(QMainWindow):
     # ============================================================================
     
     def compute_4d_fft(self):
-        """Compute 4D FFT of the loaded STEM data"""
+        """Compute 4D FFT using chunked processing"""
         if self.stem4d_data is None:
             QMessageBox.warning(self, "No Data", "Please load 4D STEM data first.")
             return
-        
-        # Memory estimation should have been done via estimate button
-        if self.fft_crop_info is None:
-            QMessageBox.warning(self, "No Size Estimation", 
-                              "Please click 'Estimate FFT Size' first to detect bright field disk and check memory requirements.")
+
+        if not hasattr(self, 'stem4d_filename') or not self.stem4d_filename:
+            QMessageBox.warning(self, "No EMD File", "Please save/load 4D STEM data as EMD file first.\nFFT requires EMD format for efficient processing.")
             return
-        
+
+        # Check if estimation was done and crop info is needed for cropped mode
+        is_cropped_mode = self.fft_mode_cropped.isChecked()
+        if is_cropped_mode and (not hasattr(self, 'fft_crop_info') or self.fft_crop_info is None):
+            QMessageBox.warning(self, "Estimation Required",
+                              "Please click 'Estimate FFT Requirements' first for cropped mode.\nThis detects the bright field disk and validates settings.")
+            return
+
         # Show progress and disable button
         self.compute_fft_btn.setEnabled(False)
         self.compute_fft_btn.setText("Computing...")
+        self.fft_info_label.setText("Initializing chunked FFT processor...")
         QApplication.processEvents()
-        
+
         try:
-            # Note: On-the-fly mode disabled for axes=(0,1) FFT  
-            # Always compute full FFT with bright field disk detection
-            self.fft_info_label.setText("Detecting bright field disk...\nAnalyzing diffraction pattern.")
+            # Determine mode and setup
+            is_cropped_mode = self.fft_mode_cropped.isChecked()
+            mode = FFTMode.CROPPED if is_cropped_mode else FFTMode.FULL
+
+            # Use original EMD file as output (append FFT results)
+            output_path = self.stem4d_filename  # Write to same file
+
+            self.fft_info_label.setText(f"Computing {mode.value} FFT...\nUsing chunked processing for memory efficiency.")
             QApplication.processEvents()
-            
-            import numpy as np
-            
-            # Use pre-computed crop info from estimation step
-            crop_info = self.fft_crop_info
-            
-            # Step 1: Crop 4D dataset to focus on bright field region
-            self.fft_info_label.setText("Cropping dataset to bright field region...\nThis reduces computation significantly.")
-            QApplication.processEvents()
-            
-            cropped_4d_data = self.crop_to_bright_field(crop_info)
-            
-            # Step 2: Compute spatial frequency FFT on cropped data
-            self.fft_info_label.setText("Computing spatial frequency FFT...\nFaster thanks to cropping!")
-            QApplication.processEvents()
-            
-            self.fft4d_data = np.fft.fftshift(np.fft.fftn(cropped_4d_data, axes=(0, 1)), axes=(0, 1))
+
+            # Create progress callback for COMPUTATION ONLY (main thread)
+            def progress_callback(message):
+                # Only handle main computation progress (not background operations)
+                if not "Background:" in message:
+                    self.fft_info_label.setText(f"Computing {mode.value} FFT...\n{message}")
+                    QApplication.processEvents()
+                else:
+                    # Background operations: emit signal for thread-safe GUI updates
+                    # Extract percentage if available
+                    progress = 0
+                    if "%" in message:
+                        try:
+                            percent_str = message.split("(")[-1].split("%")[0]
+                            progress = int(percent_str)
+                        except (ValueError, IndexError):
+                            pass
+
+                    # Emit thread-safe signal
+                    self.background_progress_updated.emit(progress, message)
+
+            # Create chunked FFT processor
+            processor = create_chunked_fft_processor(
+                conservative=True,
+                progress_callback=progress_callback
+            )
+
+            # ADAPTIVE FFT OPTIMIZATION: Use memory-based processing when data is available
+            crop_info = self.fft_crop_info if is_cropped_mode else None
+
+            if self.stem4d_data is not None:
+                # Scenario: Data already in memory (for virtual detectors)
+                # Use adaptive memory-based processing (2-20x faster)
+                self.fft_info_label.setText(f"Computing {mode.value} FFT...\nUsing adaptive memory optimization...")
+                QApplication.processEvents()
+
+                result = processor.compute_fft_from_memory(
+                    input_data=self.stem4d_data,
+                    output_emd_path=output_path,
+                    mode=mode,
+                    crop_info=crop_info,
+                    has_dataset_in_memory=True
+                )
+            else:
+                # Fallback: Traditional file-based processing
+                self.fft_info_label.setText(f"Computing {mode.value} FFT...\nUsing file-based processing...")
+                QApplication.processEvents()
+
+                result = processor.compute_fft(
+                    input_emd_path=self.stem4d_filename,
+                    output_emd_path=output_path,
+                    mode=mode,
+                    crop_info=crop_info
+                )
+
+            # Load FFT results into memory for display
+            if result.memory_data is not None:
+                # Phase 2: Use in-memory data immediately (no disk I/O delay)
+                self.fft_info_label.setText("✅ FFT results ready! (in-memory)")
+                QApplication.processEvents()
+                self.fft4d_data = result.memory_data
+                # Create metadata from result
+                fft_metadata = {
+                    'shape': result.fft_shape,
+                    'mode': result.mode.value,
+                    'optimization': result.optimization_strategy.value
+                }
+            else:
+                # Fallback: Load from disk for other scenarios
+                self.fft_info_label.setText("Loading FFT results for display...")
+                QApplication.processEvents()
+                self.fft4d_data, fft_metadata = processor.load_fft_results(output_path, mode)
+
             self.fft4d_computed = True
-            
-            # Store crop info for display purposes
-            self.fft_crop_info = crop_info
-            
+
+            # Store metadata and output path
+            self.fft_output_path = output_path
+            self.fft_mode = mode
+            self.fft_metadata = fft_metadata
+
+            # Update crop info based on mode
+            if mode == FFTMode.CROPPED and 'crop_info' in fft_metadata:
+                # Reconstruct crop_info from metadata
+                crop_meta = fft_metadata['crop_info']
+                self.fft_crop_info = {
+                    'bounds': list(crop_meta['bounds']),
+                    'size': list(crop_meta['size']),
+                    'original_shape': list(crop_meta['original_shape'])
+                }
+            elif mode == FFTMode.FULL:
+                self.fft_crop_info = None
+
             # Update displays
             self.setup_fft_displays()
             self.update_fft_displays()
-            
+
             # Show selectors
             self.fft_scan_selector_overview.setVisible(True)
             self.fft_scan_selector_subselect.setVisible(True)
             self.fft_freq_selector_amp.setVisible(True)
             self.fft_freq_selector_phase.setVisible(True)
-            
-            # Calculate data reduction benefit
-            original_size = crop_info['original_shape'][0] * crop_info['original_shape'][1]
-            cropped_size = crop_info['size'][0] * crop_info['size'][1]
-            reduction_factor = original_size / cropped_size
-            
-            self.fft_info_label.setText(f"Spatial frequency FFT computed!\n"
-                                      f"Bright field cropping: {reduction_factor:.1f}× faster\n"
-                                      f"Use selectors to explore.")
-            
+
+            # Display completion message with optimization strategy
+            optimization_info = ""
+            if hasattr(result, 'optimization_strategy') and result.optimization_strategy:
+                strategy_names = {
+                    "multithreaded": "🚀 Multi-threaded (optimal)",
+                    "single_threaded": "⚠️ I/O-optimized",
+                    "lazy_loading": "🔶 Lazy loading"
+                }
+                strategy_display = strategy_names.get(result.optimization_strategy.value, result.optimization_strategy.value)
+                optimization_info = f"• Strategy: {strategy_display}\n"
+
+                # Add memory analysis if available
+                if hasattr(result, 'memory_analysis') and result.memory_analysis:
+                    mem = result.memory_analysis
+                    optimization_info += f"• Memory: {mem.dataset_4d_size_gb:.1f}GB + {mem.fft_result_size_gb:.1f}GB / {mem.available_memory_gb:.1f}GB\n"
+
+            if mode == FFTMode.CROPPED:
+                crop_info = self.fft_crop_info
+                original_size = crop_info['original_shape'][0] * crop_info['original_shape'][1]
+                cropped_size = crop_info['size'][0] * crop_info['size'][1]
+                reduction_factor = original_size / cropped_size
+
+                self.fft_info_label.setText(
+                    f"Cropped FFT computed!\n"
+                    f"• Processing time: {result.computation_time:.1f}s\n"
+                    f"• Chunks processed: {result.chunk_count}\n"
+                    f"{optimization_info}"
+                    f"• Data reduction: {reduction_factor:.1f}× smaller\n"
+                    f"• Results saved to: {output_path}\n"
+                    f"Use selectors to explore."
+                )
+            else:
+                self.fft_info_label.setText(
+                    f"Full FFT computed!\n"
+                    f"• Processing time: {result.computation_time:.1f}s\n"
+                    f"• Chunks processed: {result.chunk_count}\n"
+                    f"{optimization_info}"
+                    f"• Full detector: {result.fft_shape[2]}×{result.fft_shape[3]} pixels\n"
+                    f"• Results saved to: {output_path}\n"
+                    f"Use selectors to explore."
+                )
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to compute 4D FFT:\n{str(e)}")
             self.fft_info_label.setText(f"FFT computation failed:\n{str(e)}")
-        
+            print(f"FFT computation error: {e}")
+
         finally:
             self.compute_fft_btn.setEnabled(True)
-            self.compute_fft_btn.setText("Compute Spatial FFT")
+            self.compute_fft_btn.setText("Compute FFT")
     
     def estimate_fft_size(self):
-        """Estimate FFT size by detecting bright field disk and calculating memory requirements"""
+        """Estimate FFT requirements based on selected mode"""
         if self.stem4d_data is None:
             QMessageBox.warning(self, "No Data", "Please load 4D STEM data first.")
             return
-        
+
         # Disable button during estimation
         self.estimate_fft_btn.setEnabled(False)
-        self.estimate_fft_btn.setText("Detecting...")
-        self.fft_memory_label.setText("Detecting bright field disk...")
+        self.estimate_fft_btn.setText("Estimating...")
         QApplication.processEvents()
-        
+
         try:
             import psutil
-            
-            # Detect bright field disk
-            crop_info = self.detect_bright_field_disk()
-            if crop_info is None:
-                self.fft_memory_label.setText("ERROR: Could not detect bright field disk.\nTry adjusting threshold or check data quality.")
-                self.compute_fft_btn.setEnabled(False)
-                return
-            
-            # Store crop info for later use
-            self.fft_crop_info = crop_info
-            
-            # Show preview of detection
-            self.show_bright_field_detection_preview(crop_info)
-            
-            # Calculate memory requirements for cropped FFT
-            sy, sx = self.stem4d_data.shape[:2]
-            crop_height, crop_width = crop_info['size']
-            
-            # Complex128 FFT data: 16 bytes per element
-            fft_bytes = sy * sx * crop_height * crop_width * 16
-            fft_gb = fft_bytes / (1024**3)
-            
+            from mib_viewer.io.adaptive_chunking import create_adaptive_chunking_strategy
+
             # Get current memory usage
             memory = psutil.virtual_memory()
             available_gb = memory.available / (1024**3)
-            
-            # Calculate data reduction
-            original_qy, original_qx = crop_info['original_shape']
-            original_bytes = sy * sx * original_qy * original_qx * 16
-            original_gb = original_bytes / (1024**3)
-            reduction_factor = original_gb / fft_gb
-            
-            # Update display
-            self.fft_memory_label.setText(
-                f"Bright field disk detected successfully!\n"
-                f"• Crop region: {crop_height} × {crop_width} pixels\n"
-                f"• Original would need: {original_gb:.2f} GB\n"
-                f"• Cropped FFT needs: {fft_gb:.2f} GB\n"
-                f"• Data reduction: {reduction_factor:.1f}× smaller\n"
-                f"• Available memory: {available_gb:.1f} GB\n"
-                f"• Status: {'✓ READY' if fft_gb < available_gb * 0.8 else '⚠ TIGHT - may be slow'}"
-            )
-            
-            # Enable compute button if memory looks good
-            if fft_gb < available_gb * 0.9:  # Leave 10% buffer
-                self.compute_fft_btn.setEnabled(True)
-                self.compute_fft_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }")
-            else:
-                # Still allow but warn user
-                reply = QMessageBox.question(self, "High Memory Usage", 
-                                           f"FFT will use {fft_gb:.1f} GB of {available_gb:.1f} GB available.\n"
-                                           f"This may be slow or cause system issues.\n\n"
-                                           f"Continue anyway?",
-                                           QMessageBox.Yes | QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    self.compute_fft_btn.setEnabled(True)
-                    self.compute_fft_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }")
-                else:
+
+            # Determine selected mode
+            is_cropped_mode = self.fft_mode_cropped.isChecked()
+            sy, sx, qy, qx = self.stem4d_data.shape
+
+            if is_cropped_mode:
+                # Cropped FFT mode - detect bright field disk first
+                self.fft_memory_label.setText("Detecting bright field disk...")
+                QApplication.processEvents()
+
+                crop_info = self.detect_bright_field_disk()
+                if crop_info is None:
+                    self.fft_memory_label.setText("ERROR: Could not detect bright field disk.\nTry Full FFT mode or check data quality.")
                     self.compute_fft_btn.setEnabled(False)
-            
+                    return
+
+                # Store crop info and show preview
+                self.fft_crop_info = crop_info
+                self.show_bright_field_detection_preview(crop_info)
+
+                # Calculate effective shape after cropping
+                crop_height, crop_width = crop_info['size']
+                effective_shape = (sy, sx, crop_height, crop_width)
+
+                # Calculate chunking strategy for cropped data
+                chunking_result = create_adaptive_chunking_strategy(
+                    effective_shape, chunk_detector_dims=True
+                )
+
+                # Display cropped mode info
+                original_qy, original_qx = crop_info['original_shape']
+                reduction_factor = (original_qy * original_qx) / (crop_height * crop_width)
+
+                self.fft_memory_label.setText(
+                    f"CROPPED FFT MODE\n"
+                    f"• BF region: {crop_height} × {crop_width} pixels\n"
+                    f"• Data reduction: {reduction_factor:.1f}× smaller\n"
+                    f"• Chunking: {chunking_result.strategy.value}\n"
+                    f"• Chunk size: {chunking_result.chunk_size_mb:.1f} MB\n"
+                    f"• Total chunks: {chunking_result.total_chunks}\n"
+                    f"• Workers: {chunking_result.num_workers}\n"
+                    f"• Memory usage: {chunking_result.estimated_memory_usage_gb:.1f} GB\n"
+                    f"• Status: ✓ READY (chunked processing)"
+                )
+
+            else:
+                # Full FFT mode - use detector chunking
+                self.fft_memory_label.setText("Calculating chunking strategy...")
+                QApplication.processEvents()
+
+                # Calculate chunking strategy for full detector
+                effective_shape = (sy, sx, qy, qx)
+                chunking_result = create_adaptive_chunking_strategy(
+                    effective_shape, chunk_detector_dims=True
+                )
+
+                # Calculate what naive FFT would need
+                naive_fft_gb = (sy * sx * qy * qx * 8) / (1024**3)  # complex64 = 8 bytes
+
+                # Display full mode info
+                self.fft_memory_label.setText(
+                    f"FULL FFT MODE\n"
+                    f"• Full detector: {qy} × {qx} pixels\n"
+                    f"• Naive FFT would need: {naive_fft_gb:.1f} GB\n"
+                    f"• Chunking: {chunking_result.strategy.value}\n"
+                    f"• Chunk size: {chunking_result.chunk_size_mb:.1f} MB\n"
+                    f"• Total chunks: {chunking_result.total_chunks}\n"
+                    f"• Workers: {chunking_result.num_workers}\n"
+                    f"• Memory usage: {chunking_result.estimated_memory_usage_gb:.1f} GB\n"
+                    f"• Status: ✓ READY (chunked processing)"
+                )
+
+                # Store empty crop_info for full mode
+                self.fft_crop_info = None
+
+            # Always enable compute button - chunked processing handles memory automatically
+            self.compute_fft_btn.setEnabled(True)
+            self.compute_fft_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }")
+
         except Exception as e:
             self.fft_memory_label.setText(f"ERROR during estimation:\n{str(e)}")
             self.compute_fft_btn.setEnabled(False)
-            print(f"Error in FFT size estimation: {e}")
-            
+            print(f"Error in FFT requirements estimation: {e}")
+
         finally:
             self.estimate_fft_btn.setEnabled(True)
-            self.estimate_fft_btn.setText("Re-estimate FFT Size")
+            self.estimate_fft_btn.setText("Re-estimate FFT Requirements")
     
     def check_fft_memory(self):
         """Check if there's enough memory for 4D FFT computation"""
@@ -3648,7 +3871,89 @@ class MibViewerPyQtGraph(QMainWindow):
             self.fft_memory_label.setText("Load 4D STEM data first")
             self.estimate_fft_btn.setEnabled(False)
             self.compute_fft_btn.setEnabled(False)
-    
+
+    def auto_detect_and_load_fft(self):
+        """Auto-detect and load existing FFT data when EMD file is opened"""
+        if not hasattr(self, 'stem4d_filename') or not self.stem4d_filename:
+            return
+
+        try:
+            # Create processor to check for existing FFT
+            processor = create_chunked_fft_processor(conservative=True)
+            existing_fft = processor.detect_existing_fft(self.stem4d_filename)
+
+            if existing_fft['cropped'] or existing_fft['full']:
+                # Found existing FFT data - auto-load it
+                preferred_mode = FFTMode.CROPPED if existing_fft['cropped'] else FFTMode.FULL
+                result = processor.auto_load_existing_fft(self.stem4d_filename, preferred_mode)
+
+                if result:
+                    fft_data, fft_metadata, actual_mode = result
+
+                    # Store loaded FFT data
+                    self.fft4d_data = fft_data
+                    self.fft4d_computed = True
+                    self.fft_mode = actual_mode
+                    self.fft_metadata = fft_metadata
+                    self.fft_output_path = self.stem4d_filename  # Same file
+
+                    # Update UI to show FFT is ready
+                    mode_name = actual_mode.value.capitalize()
+                    self.fft_info_label.setText(f"✅ {mode_name} FFT loaded from file!\n"
+                                              f"Ready for analysis and virtual detectors.")
+
+                    # Update tab to show FFT is available
+                    self.tab_widget.setTabText(2, "4D FFT ✅")
+
+                    # Enable estimation button but show it's not needed
+                    self.estimate_fft_btn.setEnabled(True)
+                    self.estimate_fft_btn.setText("Re-estimate FFT")
+
+                    # Set compute button to "Recompute"
+                    self.compute_fft_btn.setText("Recompute FFT")
+                    self.compute_fft_btn.setEnabled(True)
+                    self.compute_fft_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; }")
+
+                    self.log_message(f"Auto-loaded {mode_name} FFT from file ({fft_data.shape})")
+
+                    # Update FFT displays to show the loaded data
+                    self.update_fft_displays()
+
+                    # Ensure phase display uses seismic colormap (like normal workflow)
+                    try:
+                        seismic_colors = [[0, 0, 255, 255], [255, 255, 255, 255], [255, 0, 0, 255]]  # Blue-White-Red
+                        seismic_colormap = pg.ColorMap([0.0, 0.5, 1.0], seismic_colors)
+                        self.fft_phase_item.setColorMap(seismic_colormap)
+                    except Exception:
+                        pass  # Fallback to default if colormap setting fails
+
+                    # Show and position FFT selectors (like normal workflow)
+                    try:
+                        # Show selectors
+                        self.fft_scan_selector_overview.setVisible(True)
+                        self.fft_scan_selector_subselect.setVisible(True)
+                        self.fft_freq_selector_amp.setVisible(True)
+                        self.fft_freq_selector_phase.setVisible(True)
+
+                        # Center frequency selectors on loaded FFT data
+                        sy, sx, qy, qx = fft_data.shape
+                        freq_center_x, freq_center_y = qx // 2, qy // 2
+                        self.fft_freq_selector_amp.setPos([freq_center_x - 5, freq_center_y - 5])
+                        self.fft_freq_selector_phase.setPos([freq_center_x - 5, freq_center_y - 5])
+                    except Exception:
+                        pass  # Fallback if selector setup fails
+
+                else:
+                    # Detection found FFT but loading failed
+                    self.log_message("Found FFT data but failed to load - you may need to recompute", "WARNING")
+
+            else:
+                # No existing FFT found - normal workflow
+                self.tab_widget.setTabText(2, "4D FFT")
+
+        except Exception as e:
+            self.log_message(f"Error checking for existing FFT: {str(e)}", "ERROR")
+
     # ============================================================================
     # Bright Field Disk Detection Methods
     # ============================================================================
@@ -4305,6 +4610,135 @@ Bright Field Disk Detection Results:
 
         # Log current data availability for debugging
         self.log_message(f"Save menu updated - EELS available: {eels_available}")
+
+    def _check_4dstem_memory_requirements(self, filename: str) -> bool:
+        """
+        Check if 4D STEM dataset will fit in available memory.
+        If not, suggest conversion with binning.
+
+        Returns:
+        --------
+        bool : True if can proceed with loading, False if user cancelled
+        """
+        try:
+            # Get file info without loading full dataset
+            file_info = get_data_file_info(filename)
+
+            if file_info.get('experiment_type') != '4D_STEM':
+                return True  # Not 4D STEM, proceed normally
+
+            # Get available system memory
+            try:
+                import psutil
+                available_memory_gb = psutil.virtual_memory().available / (1024**3)
+                total_memory_gb = psutil.virtual_memory().total / (1024**3)
+            except ImportError:
+                # Fallback if psutil not available - assume 8GB available
+                available_memory_gb = 8.0
+                total_memory_gb = 16.0
+
+            # Estimate memory requirement for dataset (uint16 = 2 bytes per pixel)
+            shape = file_info['shape']
+            sy, sx, dy, dx = shape
+            estimated_memory_gb = (sy * sx * dy * dx * 2) / (1024**3)
+
+            # Use conservative threshold - need at least 50% more memory than dataset size
+            # to account for processing, GUI, etc.
+            memory_threshold = available_memory_gb * 0.6  # Use 60% of available memory
+
+            self.log_message(f"4D STEM dataset: {sy}×{sx}×{dy}×{dx}")
+            self.log_message(f"Estimated memory requirement: {estimated_memory_gb:.1f} GB")
+            self.log_message(f"Available memory: {available_memory_gb:.1f} GB")
+
+            if estimated_memory_gb <= memory_threshold:
+                self.log_message("Dataset fits in memory - proceeding with normal loading")
+                return True
+
+            # Dataset too large - show binning suggestion dialog
+            self.log_message(f"Dataset too large for available memory ({estimated_memory_gb:.1f} GB > {memory_threshold:.1f} GB)")
+            return self._show_binning_suggestion_dialog(shape, estimated_memory_gb, memory_threshold, filename)
+
+        except Exception as e:
+            self.log_message(f"Error checking memory requirements: {str(e)}", "ERROR")
+            # On error, assume we can proceed (conservative approach)
+            return True
+
+    def _show_binning_suggestion_dialog(self, shape: tuple, required_gb: float, available_gb: float, filename: str = "") -> bool:
+        """
+        Show dialog suggesting optimal binning factor for large 4D STEM datasets
+
+        Returns:
+        --------
+        bool : True if user wants to convert, False if cancelled
+        """
+        sy, sx, dy, dx = shape
+
+        # Calculate optimal binning factor
+        target_memory_gb = available_gb * 0.9  # Use 90% of available
+        memory_ratio = required_gb / target_memory_gb
+
+        # Binning reduces data by bin_factor^2 in detector dimensions
+        required_reduction = memory_ratio
+        optimal_bin_factor = int(np.ceil(np.sqrt(required_reduction)))
+
+        # Ensure bin factor divides detector dimensions evenly
+        valid_factors = get_valid_bin_factors(min(dy, dx))
+        optimal_bin_factor = min(valid_factors, key=lambda x: abs(x - optimal_bin_factor))
+
+        # Calculate resulting size with optimal binning
+        new_dy = dy // optimal_bin_factor
+        new_dx = dx // optimal_bin_factor
+        new_memory_gb = (sy * sx * new_dy * new_dx * 2) / (1024**3)
+        reduction_factor = required_gb / new_memory_gb
+
+        # Create dialog
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("4D STEM Dataset Too Large")
+        dialog.setIcon(QMessageBox.Warning)
+
+        message = f"""The 4D STEM dataset is too large to fit in available memory:
+
+<b>Dataset:</b> {sy}×{sx}×{dy}×{dx}
+<b>Required memory:</b> {required_gb:.1f} GB
+<b>Available memory:</b> {available_gb:.1f} GB
+
+<b>Recommended solution:</b>
+Convert to EMD format with {optimal_bin_factor}×{optimal_bin_factor} binning:
+• New detector size: {new_dy}×{new_dx}
+• Memory requirement: {new_memory_gb:.1f} GB
+• File size reduction: {reduction_factor:.1f}×
+
+This will reduce noise and enable all 4D STEM features including virtual detectors."""
+
+        dialog.setText(message)
+
+        # Add custom buttons
+        convert_btn = dialog.addButton("Convert with Binning", QMessageBox.AcceptRole)
+        cancel_btn = dialog.addButton("Cancel", QMessageBox.RejectRole)
+
+        dialog.setDefaultButton(convert_btn)
+
+        # Show dialog and handle response
+        dialog.exec_()
+
+        if dialog.clickedButton() == convert_btn:
+            # Open converter tab with suggested binning
+            self.tab_widget.setCurrentIndex(2)  # Converter tab
+
+            # Set up converter with recommended settings
+            if hasattr(self, 'input_path_edit'):
+                self.input_path_edit.setText(filename)
+            if hasattr(self, 'bin_factor_combo'):
+                bin_text = f"{optimal_bin_factor}x{optimal_bin_factor}"
+                index = self.bin_factor_combo.findText(bin_text)
+                if index >= 0:
+                    self.bin_factor_combo.setCurrentIndex(index)
+
+            self.log_message(f"Suggested {optimal_bin_factor}×{optimal_bin_factor} binning for optimal memory usage")
+            return False  # Don't proceed with direct loading
+
+        return False  # User cancelled
+
 
 def main():
     """Main entry point for the PyQtGraph application"""
