@@ -28,11 +28,24 @@ jobs:
         pip install --upgrade pip
         pip install pyinstaller PyQt5 pyqtgraph numpy matplotlib h5py emdfile tqdm py4dstem
     
+    - name: Extract version number
+      id: get-version
+      run: |
+        echo "=== Extracting Version Number ==="
+        $version = python -c "import sys; sys.path.append('src'); from mib_viewer import __version__; print(__version__)"
+        echo "Detected version: $version"
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+        echo "VERSION=$version" >> $env:GITHUB_ENV
+
     - name: Build Windows executable
       run: |
+        echo "=== Building Windows Executable (v${{ env.VERSION }}) ==="
         pyinstaller MibViewer.spec --distpath dist --workpath build
-        if (-not (Test-Path "dist/MibViewer-Windows.exe")) {
-          pyinstaller --onefile --windowed --name=MibViewer-Windows `
+        if (Test-Path "dist/MibViewer-Windows.exe") {
+          # Rename to include version
+          Move-Item "dist/MibViewer-Windows.exe" "dist/MibViewer-Windows-v${{ env.VERSION }}.exe"
+        } else {
+          pyinstaller --onefile --windowed --name="MibViewer-Windows-v${{ env.VERSION }}" `
             --add-data "src;src" `
             --hidden-import=mib_viewer.gui.mib_viewer_pyqtgraph `
             --hidden-import=mib_viewer.io.mib_loader `
@@ -43,8 +56,8 @@ jobs:
     - name: Upload Windows executable
       uses: actions/upload-artifact@v4
       with:
-        name: MibViewer-Windows-exe
-        path: dist/MibViewer-Windows.exe
+        name: MibViewer-Windows-v${{ env.VERSION }}-exe
+        path: dist/MibViewer-Windows-v${{ env.VERSION }}.exe
         retention-days: 30
 
   build-linux:
@@ -69,11 +82,27 @@ jobs:
         pip install --upgrade pip
         pip install pyinstaller PyQt5 pyqtgraph numpy matplotlib h5py emdfile tqdm py4dstem
     
+    - name: Extract version number
+      id: get-version
+      run: |
+        echo "=== Extracting Version Number ==="
+        VERSION=$(python -c "import sys; sys.path.append('src'); from mib_viewer import __version__; print(__version__)")
+        echo "Detected version: $VERSION"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
     - name: Build Linux executable
       run: |
+        echo "=== Building Linux Executable (v$VERSION) ==="
+        BINARY_NAME="MibViewer-Ubuntu22-v${VERSION}"
+        echo "Binary name: $BINARY_NAME"
+
         pyinstaller MibViewer.spec --distpath dist-linux --workpath build-linux
-        if [ ! -f "dist-linux/MibViewer-Ubuntu22+" ]; then
-          pyinstaller --onefile --windowed --name=MibViewer-Ubuntu22+ \
+        if [ -f "dist-linux/MibViewer-Ubuntu22+" ]; then
+          # Rename to include version
+          mv "dist-linux/MibViewer-Ubuntu22+" "dist-linux/$BINARY_NAME"
+        else
+          pyinstaller --onefile --windowed --name="$BINARY_NAME" \
             --add-data "src:src" \
             --hidden-import=mib_viewer.gui.mib_viewer_pyqtgraph \
             --hidden-import=mib_viewer.io.mib_loader \
@@ -81,13 +110,16 @@ jobs:
             --distpath dist-linux \
             src/mib_viewer/__main__.py
         fi
-        chmod +x "dist-linux/MibViewer-Ubuntu22+"
+        chmod +x "dist-linux/$BINARY_NAME"
+
+        # Store binary name for later steps
+        echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
     
     - name: Upload Linux executable
       uses: actions/upload-artifact@v4
       with:
-        name: MibViewer-Linux
-        path: dist-linux/MibViewer-Ubuntu22+
+        name: ${{ env.BINARY_NAME }}
+        path: dist-linux/${{ env.BINARY_NAME }}
         retention-days: 30
 
   create-release:
@@ -96,24 +128,38 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     
     steps:
+    - name: Get version from tag
+      id: get-tag-version
+      run: |
+        if [ "${{ github.ref_name }}" != "" ]; then
+          VERSION="${{ github.ref_name }}"
+          # Remove 'v' prefix if present
+          VERSION=${VERSION#v}
+        else
+          VERSION="${{ github.run_number }}"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Release version: $VERSION"
+
     - name: Download Windows artifact
       uses: actions/download-artifact@v4
       with:
-        name: MibViewer-Windows-exe
+        name: MibViewer-Windows-v${{ env.VERSION }}-exe
         path: ./windows
-        
+
     - name: Download Linux artifact
       uses: actions/download-artifact@v4
       with:
-        name: MibViewer-Linux
+        name: MibViewer-Ubuntu22-v${{ env.VERSION }}
         path: ./linux
         
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          ./windows/MibViewer-Windows.exe
-          ./linux/MibViewer-Ubuntu22+
+          ./windows/MibViewer-Windows-v${{ env.VERSION }}.exe
+          ./linux/MibViewer-Ubuntu22-v${{ env.VERSION }}
         name: MIB Viewer ${{ github.ref_name || format('v{0}', github.run_number) }}
         body: |
           # MIB Viewer ${{ github.ref_name || format('v{0}', github.run_number) }}
@@ -121,14 +167,14 @@ jobs:
           ## 🚀 Multi-Platform Release
           
           ### **Windows**
-          - **Download**: `MibViewer-Windows.exe` (attached below)
+          - **Download**: `MibViewer-Windows-v${{ env.VERSION }}.exe` (attached below)
           - **Requirements**: Windows 10/11 (64-bit)
           - **Usage**: Double-click to run
-          
+
           ### **Linux (Ubuntu/Debian)**
-          - **Download**: `MibViewer-Ubuntu22+` (attached below)
+          - **Download**: `MibViewer-Ubuntu22-v${{ env.VERSION }}` (attached below)
           - **Requirements**: Ubuntu 22.04+ or equivalent (built on Ubuntu 22.04)
-          - **Usage**: `chmod +x MibViewer-Ubuntu22+ && ./MibViewer-Ubuntu22+`
+          - **Usage**: `chmod +x MibViewer-Ubuntu22-v${{ env.VERSION }} && ./MibViewer-Ubuntu22-v${{ env.VERSION }}`
           
           ## ✨ Features
           - **EELS Analysis**: Hardware-accelerated PyQtGraph interface
@@ -143,8 +189,8 @@ jobs:
           
           ## 🔧 Usage
           1. **Download** the appropriate executable for your platform
-          2. **Windows**: Double-click `MibViewer-Windows.exe`
-          3. **Linux**: `chmod +x MibViewer-Ubuntu22+ && ./MibViewer-Ubuntu22+`
+          2. **Windows**: Double-click `MibViewer-Windows-v${{ env.VERSION }}.exe`
+          3. **Linux**: `chmod +x MibViewer-Ubuntu22-v${{ env.VERSION }} && ./MibViewer-Ubuntu22-v${{ env.VERSION }}`
           4. **Load Data**: File → Load MIB File → select your dataset
           5. **Analyze**: Switch between EELS and 4D STEM tabs
           
