@@ -9,6 +9,7 @@ import os
 import json
 import zipfile
 import datetime
+import time
 from typing import Optional, Tuple
 
 import numpy as np
@@ -27,7 +28,7 @@ try:
     from ..io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
                                      get_mib_properties, auto_detect_scan_size, MibProperties,
                                      detect_experiment_type, apply_data_processing, calculate_processed_size,
-                                     get_valid_bin_factors)
+                                     get_valid_bin_factors, load_data_comprehensive)
     from ..io.mib_to_emd_converter import MibToEmdConverter
     from .enhanced_conversion_worker import ConversionWorkerFactory
     from ..io.chunked_fft_processor import (
@@ -38,7 +39,7 @@ except ImportError:
     from mib_viewer.io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
                                           get_mib_properties, auto_detect_scan_size, MibProperties,
                                           detect_experiment_type, apply_data_processing, calculate_processed_size,
-                                          get_valid_bin_factors)
+                                          get_valid_bin_factors, load_data_comprehensive)
     from mib_viewer.io.mib_to_emd_converter import MibToEmdConverter
     from mib_viewer.gui.enhanced_conversion_worker import ConversionWorkerFactory
     from mib_viewer.io.chunked_fft_processor import (
@@ -206,6 +207,9 @@ class MibViewerPyQtGraph(QMainWindow):
         self.eels_filename = ""
         self.ndata_filename = ""
         self.stem4d_filename = ""
+
+        # Metadata storage
+        self.ndata_metadata = None  # Store ndata metadata for export
         
         # Current selections
         self.current_roi = None  # Will store ROI bounds
@@ -1158,16 +1162,14 @@ class MibViewerPyQtGraph(QMainWindow):
         load_ndata_action = QAction('Load ndata File...', self)
         load_ndata_action.triggered.connect(self.load_ndata_file)
         file_menu.addAction(load_ndata_action)
-        
-        file_menu.addSeparator()
-
-        # Save EELS as EMD option - enabled when EELS data is available
-        self.save_eels_action = QAction('Save EELS as EMD...', self)
-        self.save_eels_action.triggered.connect(self.save_eels_as_emd)
-        self.save_eels_action.setEnabled(False)  # Start disabled
-        file_menu.addAction(self.save_eels_action)
 
         file_menu.addSeparator()
+
+        # Export menu option - renamed for clarity
+        export_eels_display_action = QAction('Save EELS Display as EMD...', self)
+        export_eels_display_action.triggered.connect(self.save_eels_display_as_emd)
+        file_menu.addAction(export_eels_display_action)
+
 
         exit_action = QAction('Exit', self)
         exit_action.triggered.connect(self.close)
@@ -1230,11 +1232,20 @@ class MibViewerPyQtGraph(QMainWindow):
                 if not self._check_4dstem_memory_requirements(filename):
                     return  # User cancelled or chose to convert
 
-            # Standard loading for smaller files or EMD files
-            raw_data = load_data_file(filename)
+            # Use comprehensive loader for EMD files, standard loader for MIB files
+            if file_ext == '.emd':
+                # Use comprehensive loader for EMD files (supports multiple data types)
+                success = self.load_data_comprehensive_gui(filename)
+                if success:
+                    return  # Comprehensive loader handles all GUI updates
+                else:
+                    return  # Error already handled
+            else:
+                # Standard loading for MIB files
+                raw_data = load_data_file(filename)
 
-            # Log the loaded data dimensions
-            self.log_message(f"Loaded data shape: {raw_data.shape} (scan_y, scan_x, detector_y, detector_x)")
+                # Log the loaded data dimensions
+                self.log_message(f"Loaded data shape: {raw_data.shape} (scan_y, scan_x, detector_y, detector_x)")
 
             # Detect experiment type based on data shape
             experiment_type, exp_info = detect_experiment_type(raw_data.shape)
@@ -1493,6 +1504,95 @@ class MibViewerPyQtGraph(QMainWindow):
         except Exception as e:
             self.log_message(f"Error in polling update: {str(e)}", "ERROR")
 
+    def load_data_comprehensive_gui(self, filename):
+        """Load data using comprehensive loader and populate GUI appropriately."""
+
+        try:
+            self.log_message(f"Loading file with comprehensive loader: {os.path.basename(filename)}")
+
+            # Use the new comprehensive loader
+            result = load_data_comprehensive(filename)
+
+            experiment_type = result["experiment_type"]
+            file_info = result["file_info"]
+
+            self.log_message(f"Loaded: {experiment_type}, File info: {file_info}")
+
+            # Handle EELS data if present
+            if result["eels_data"] is not None:
+                self.eels_data = result["eels_data"]
+                self.eels_filename = os.path.basename(filename)
+                file_type = file_info.get('file_type', 'Unknown')
+                self.eels_label.setText(f"EELS File: {self.eels_filename} ({file_type})")
+
+                # Log EELS data info
+                self.log_message(f"EELS data shape: {self.eels_data.shape} (scan_y, scan_x, detector_y, detector_x)")
+
+                # Handle EELS-specific processing
+                if experiment_type == "EELS":
+                    processing_info = result["metadata"].get("processing_info", {})
+                    if processing_info.get("can_sum_y", False):
+                        sy, sx, dy, dx = self.eels_data.shape
+                        if dy < dx:
+                            self.log_message(f"Auto-summing Y detector dimension: {dy}×{dx} → 1×{dx}")
+                            summed_data = np.sum(self.eels_data, axis=2, keepdims=True)
+                            self.eels_data = summed_data
+                        else:
+                            self.log_message(f"Auto-summing X detector dimension: {dy}×{dx} → {dy}×1")
+                            summed_data = np.sum(self.eels_data, axis=3, keepdims=True)
+                            self.eels_data = summed_data
+
+            # Handle HAADF data if present
+            if result["haadf_data"] is not None:
+                self.ndata_data = result["haadf_data"]
+                self.ndata_metadata = result["metadata"].get("haadf_metadata", {})
+                self.ndata_filename = os.path.basename(filename)
+
+                # Log HAADF data info
+                self.log_message(f"HAADF data shape: {self.ndata_data.shape}")
+                self.log_message(f"Loaded HAADF image from {experiment_type} file")
+
+            # Update GUI state based on what was loaded
+            if result["eels_data"] is not None:
+                # Set up EELS tab and ROI
+                self.tab_widget.setCurrentIndex(0)  # Switch to EELS tab
+
+                # Initialize ROI to center of EELS data
+                h, w = self.eels_data.shape[:2]
+                if self.roi_mode:
+                    roi_size = min(w, h) // 3
+                    roi_x = (w - roi_size) // 2
+                    roi_y = (h - roi_size) // 2
+                    self.current_roi = (roi_x, roi_y, roi_size, roi_size, 0.0)
+                else:
+                    self.current_roi = (w // 2, h // 2)
+
+            # Check compatibility and update displays
+            if result["eels_data"] is not None and result["haadf_data"] is not None:
+                # Both datasets loaded - check compatibility
+                self.check_compatibility()
+
+            # Update all displays
+            self.update_displays()
+
+            # Update status
+            if experiment_type == "COMBINED":
+                self.status_bar.showMessage("Loaded combined EELS and HAADF data")
+                self.log_message("Successfully loaded combined dataset with both EELS and HAADF data")
+            elif experiment_type == "HAADF":
+                self.status_bar.showMessage("Loaded HAADF image data")
+            else:
+                self.status_bar.showMessage("Loaded EELS data")
+
+            return True
+
+        except Exception as e:
+            error_msg = f"Error loading file with comprehensive loader: {str(e)}"
+            QMessageBox.critical(self, "Error", error_msg)
+            self.status_bar.showMessage("Ready")
+            self.log_message(error_msg, "ERROR")
+            return False
+
     def load_ndata_file(self):
         """Load an ndata file"""
         filename, _ = QFileDialog.getOpenFileName(
@@ -1519,13 +1619,19 @@ class MibViewerPyQtGraph(QMainWindow):
                 # Load numpy data
                 with zip_file.open('data.npy') as npy_file:
                     self.ndata_data = np.load(npy_file)
-                
-                # Load metadata (optional)
+
+                # Load metadata and store it
                 with zip_file.open('metadata.json') as json_file:
-                    metadata = json.load(json_file)
-            
+                    self.ndata_metadata = json.load(json_file)
+
             self.ndata_filename = os.path.basename(filename)
             self.ndata_label.setText(f"ndata File: {self.ndata_filename}")
+
+            # Log metadata extraction for debugging
+            if self.ndata_metadata:
+                title = self.ndata_metadata.get('title', 'Unknown')
+                fov_nm = self.ndata_metadata.get('metadata', {}).get('scan', {}).get('fov_nm', 'Unknown')
+                self.log_message(f"Loaded ndata metadata - Title: {title}, FOV: {fov_nm} nm")
             
             # Check compatibility with EELS data
             if self.eels_data is not None:
@@ -1536,6 +1642,105 @@ class MibViewerPyQtGraph(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load ndata file:\n{str(e)}")
+            self.status_bar.showMessage("Ready")
+
+    def save_eels_display_as_emd(self):
+        """Save EELS display data (EELS and/or HAADF) to EMD format"""
+        # Check what data is available for export
+        has_eels = self.eels_data is not None
+        has_ndata = self.ndata_data is not None
+
+        if not has_eels and not has_ndata:
+            QMessageBox.information(self, "No EELS Data", "No EELS data loaded for export.\nPlease load EELS and/or HAADF (ndata) files first.")
+            return
+
+        # Get output filename
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save EELS Display as EMD",
+            "",
+            "EMD files (*.emd);;All files (*.*)"
+        )
+
+        if not filename:
+            return
+
+        # Ensure .emd extension
+        if not filename.lower().endswith('.emd'):
+            filename += '.emd'
+
+        try:
+            self.status_bar.showMessage("Exporting EELS display to EMD...")
+            QApplication.processEvents()
+
+            # Prepare display data dictionary
+            display_data = {}
+
+            # Add EELS data if available
+            if has_eels:
+                display_data['eels_data'] = self.eels_data
+                display_data['eels_metadata'] = {
+                    'filename': self.eels_filename,
+                    'shape': self.eels_data.shape,
+                    'data_type': 'eels_4d'
+                }
+
+            # Add ndata data if available
+            if has_ndata:
+                display_data['haadf_data'] = self.ndata_data
+                # Process ndata metadata using the converter's helper method
+                from ..io.mib_to_emd_converter import MibToEmdConverter
+                converter = MibToEmdConverter()
+                if self.ndata_metadata:
+                    processed_metadata = converter.process_ndata_metadata(
+                        self.ndata_metadata,
+                        self.ndata_data.shape,
+                        self.ndata_filename
+                    )
+                    display_data['haadf_metadata'] = processed_metadata
+                else:
+                    # Fallback metadata if original metadata wasn't preserved
+                    display_data['haadf_metadata'] = {
+                        'filename': self.ndata_filename,
+                        'shape_2d': self.ndata_data.shape,
+                        'data_type': 'image'
+                    }
+
+            # Add additional metadata
+            metadata_extra = {
+                'export_timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'export_source': 'mib_viewer_gui',
+                'roi_state': self.current_roi,
+                'energy_range': self.current_energy_range
+            }
+
+            # Create converter and export
+            converter = MibToEmdConverter(
+                log_callback=self.log_message,
+                progress_callback=None  # Could add progress dialog here
+            )
+
+            stats = converter.export_display_data(filename, display_data, metadata_extra)
+
+            # Show success message
+            export_type = stats['export_type']
+            output_size = stats['output_size_gb']
+            compression_ratio = stats['compression_ratio']
+
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"Successfully exported {export_type} EELS data to EMD format!\n\n"
+                f"File: {os.path.basename(filename)}\n"
+                f"Size: {output_size:.2f} GB\n"
+                f"Compression: {compression_ratio:.1f}x"
+            )
+
+            self.status_bar.showMessage(f"Exported EELS display to: {os.path.basename(filename)}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export display data:\n{str(e)}")
+            self.log_message(f"Export error: {str(e)}", "ERROR")
             self.status_bar.showMessage("Ready")
     
     def check_compatibility(self):
@@ -4511,105 +4716,12 @@ Bright Field Disk Detection Results:
         except Exception as e:
             print(f"Error resetting UI state: {e}")
 
-    def save_eels_as_emd(self):
-        """Save EELS data as EMD file"""
-        if self.eels_data is None:
-            QMessageBox.warning(self, "No EELS Data", "No EELS data available to save.")
-            return
-
-        # Get output file path
-        filename, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save EELS as EMD",
-            "",
-            "EMD files (*.h5 *.emd);;All files (*.*)"
-        )
-
-        if not filename:
-            return
-
-        # Ensure .h5 extension
-        if not filename.lower().endswith(('.h5', '.emd')):
-            filename += '.h5'
-
-        try:
-            # Import the EELS EMD saver
-            from ..io.eels_emd_saver import EelsEmdSaver
-
-            # Create progress dialog
-            progress_dialog = QProgressDialog("Saving EELS data as EMD...", "Cancel", 0, 0, self)
-            progress_dialog.setWindowModality(Qt.WindowModal)
-            progress_dialog.setWindowTitle("Saving EMD File")
-            progress_dialog.show()
-            QApplication.processEvents()
-
-            # Progress callback for updates
-            def progress_callback(message):
-                progress_dialog.setLabelText(message)
-                QApplication.processEvents()
-                if progress_dialog.wasCanceled():
-                    raise InterruptedError("Save operation cancelled by user")
-
-            # Create saver and save data
-            saver = EelsEmdSaver(compression='gzip', compression_level=6)
-
-            # Determine original MIB path
-            original_mib_path = ""
-            if hasattr(self, 'progressive_loader') and self.progressive_loader:
-                original_mib_path = self.progressive_loader.file_path
-            elif hasattr(self, 'eels_filename') and self.eels_filename:
-                # Try to reconstruct path (this is best effort)
-                original_mib_path = self.eels_filename
-
-            # Estimate file size
-            estimated_mb = saver.get_estimated_file_size(self.eels_data)
-            self.log_message(f"Saving EELS data as EMD (estimated size: {estimated_mb:.1f} MB)...")
-
-            # Save the data
-            success = saver.save_eels_data(
-                self.eels_data,
-                original_mib_path,
-                filename,
-                progress_callback
-            )
-
-            progress_dialog.close()
-
-            if success:
-                # Check actual file size
-                actual_size_mb = os.path.getsize(filename) / (1024**2)
-                QMessageBox.information(
-                    self,
-                    "Save Successful",
-                    f"EELS data saved successfully!\n\n"
-                    f"File: {os.path.basename(filename)}\n"
-                    f"Size: {actual_size_mb:.1f} MB\n"
-                    f"Format: EMD 1.0 (compatible with py4DSTEM)"
-                )
-                self.log_message(f"EELS data saved as EMD: {filename} ({actual_size_mb:.1f} MB)", "SUCCESS")
-
-                # Clear unsaved progressive data flag since we've successfully saved
-                self.has_unsaved_progressive_data = False
-            else:
-                QMessageBox.critical(self, "Save Failed", "Failed to save EELS data as EMD.")
-
-        except InterruptedError:
-            QMessageBox.information(self, "Save Cancelled", "Save operation was cancelled.")
-        except Exception as e:
-            progress_dialog.close()
-            error_msg = f"Error saving EELS data as EMD:\n{str(e)}"
-            QMessageBox.critical(self, "Save Error", error_msg)
-            self.log_message(f"Error saving EELS as EMD: {str(e)}", "ERROR")
 
     def _update_save_menu_states(self):
         """Update save menu options based on available data"""
-        # Enable/disable EELS save option
-        eels_available = self.eels_data is not None
-        if hasattr(self, 'save_eels_action'):
-            self.save_eels_action.setEnabled(eels_available)
-
-        # Log current data availability for debugging
-        self.log_message(f"Save menu updated - EELS available: {eels_available}")
+        # Note: The new "Save EELS Display as EMD" option handles its own availability checking
+        # No menu state management needed since the export dialog provides appropriate feedback
+        pass
 
     def _check_4dstem_memory_requirements(self, filename: str) -> bool:
         """

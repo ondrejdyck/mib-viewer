@@ -281,6 +281,185 @@ def load_data_file(path_buffer):
                 raise ValueError(f"Cannot determine file type or load data from: {path_buffer}")
 
 
+def load_data_comprehensive(filename):
+    """Universal loader with structured return format for multiple data types.
+
+    Supports:
+    - MIB files: Uses existing proven loader, wraps result
+    - EMD files: Handles multiple data types (EELS + HAADF)
+
+    Parameters:
+    -----------
+    filename : str
+        Path to data file (.mib or .emd)
+
+    Returns:
+    --------
+    dict
+        {
+            "eels_data": np.ndarray or None,      # 4D EELS/4D-STEM data
+            "haadf_data": np.ndarray or None,     # 2D HAADF data
+            "experiment_type": str,               # "EELS", "4D_STEM", "HAADF", "COMBINED"
+            "metadata": dict,                     # All available metadata
+            "file_info": dict                     # File type, dimensions, etc.
+        }
+    """
+    import os
+
+    filename_str = str(filename).lower()
+
+    if filename_str.endswith('.mib'):
+        return _load_mib_comprehensive(filename)
+    elif filename_str.endswith('.emd'):
+        return _load_emd_comprehensive(filename)
+    else:
+        # Try to auto-detect based on content
+        try:
+            return _load_emd_comprehensive(filename)
+        except:
+            try:
+                return _load_mib_comprehensive(filename)
+            except:
+                raise ValueError(f"Cannot determine file type or load data from: {filename}")
+
+
+def _load_mib_comprehensive(filename):
+    """Load MIB file using existing proven loader, wrap in structured format."""
+
+    # Use existing proven MIB loader - zero risk
+    raw_data = load_mib(filename)
+
+    # Use existing experiment type detection
+    experiment_type, processing_info = detect_experiment_type(raw_data.shape)
+
+    # Get file info using existing function
+    file_info = get_data_file_info(filename)
+
+    return {
+        "eels_data": raw_data if experiment_type in ["EELS", "4D_STEM"] else None,
+        "haadf_data": None,  # MIB files don't contain HAADF data
+        "experiment_type": experiment_type,
+        "metadata": {
+            "processing_info": processing_info,
+            "file_info": file_info
+        },
+        "file_info": file_info
+    }
+
+
+def _load_emd_comprehensive(filename):
+    """Load EMD file with support for multiple data types."""
+
+    try:
+        import h5py
+    except ImportError:
+        raise ImportError("h5py is required to load EMD files. Install with: pip install h5py")
+
+    try:
+        with h5py.File(filename, 'r') as f:
+            if 'version_1' not in f:
+                raise ValueError("Not a valid EMD 1.0 file - missing version_1 group")
+
+            version_group = f['version_1']
+            if 'data' not in version_group:
+                raise ValueError("Not a valid EMD 1.0 file - missing data group")
+
+            data_group = version_group['data']
+
+            # Check what data types are available
+            has_datacubes = 'datacubes' in data_group and 'datacube_000' in data_group['datacubes']
+            has_images = 'images' in data_group and 'image_000' in data_group['images']
+
+            if not has_datacubes and not has_images:
+                raise ValueError("EMD file contains no supported data (no datacubes or images)")
+
+            # Initialize return data
+            eels_data = None
+            haadf_data = None
+            metadata = {}
+
+            # Load EELS/4D-STEM data if available
+            if has_datacubes:
+                datacube = data_group['datacubes']['datacube_000']
+                if 'data' not in datacube:
+                    raise ValueError("Datacube missing data dataset")
+
+                eels_data = datacube['data'][:]
+                if len(eels_data.shape) != 4:
+                    raise ValueError(f"Expected 4D datacube, got {len(eels_data.shape)}D with shape {eels_data.shape}")
+
+                # Store datacube metadata
+                metadata['eels_metadata'] = _extract_emd_metadata(datacube)
+
+            # Load HAADF data if available
+            if has_images:
+                image = data_group['images']['image_000']
+                if 'data' not in image:
+                    raise ValueError("Image missing data dataset")
+
+                haadf_data = image['data'][:]
+                if len(haadf_data.shape) != 2:
+                    raise ValueError(f"Expected 2D image, got {len(haadf_data.shape)}D with shape {haadf_data.shape}")
+
+                # Store image metadata
+                metadata['haadf_metadata'] = _extract_emd_metadata(image)
+
+            # Determine experiment type
+            if has_datacubes and has_images:
+                experiment_type = "COMBINED"
+            elif has_datacubes:
+                experiment_type, processing_info = detect_experiment_type(eels_data.shape)
+                metadata['processing_info'] = processing_info
+            else:  # has_images only
+                experiment_type = "HAADF"
+
+            # File info
+            import os
+            file_info = {
+                'file_type': 'EMD 1.0',
+                'size_bytes': os.path.getsize(filename),
+                'has_datacubes': has_datacubes,
+                'has_images': has_images,
+                'datacube_shape': eels_data.shape if eels_data is not None else None,
+                'image_shape': haadf_data.shape if haadf_data is not None else None
+            }
+
+            return {
+                "eels_data": eels_data,
+                "haadf_data": haadf_data,
+                "experiment_type": experiment_type,
+                "metadata": metadata,
+                "file_info": file_info
+            }
+
+    except OSError as e:
+        if "Unable to open file" in str(e):
+            raise ValueError(f"Cannot open EMD file: {filename}")
+        else:
+            raise ValueError(f"Error reading EMD file: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Failed to load EMD file: {str(e)}")
+
+
+def _extract_emd_metadata(dataset_group):
+    """Extract metadata from EMD dataset group."""
+    metadata = {}
+
+    # Extract attributes
+    if hasattr(dataset_group, 'attrs'):
+        for key, value in dataset_group.attrs.items():
+            try:
+                # Convert numpy types to Python types for JSON serialization
+                if hasattr(value, 'item'):
+                    metadata[key] = value.item()
+                else:
+                    metadata[key] = value
+            except:
+                metadata[key] = str(value)
+
+    return metadata
+
+
 def detect_experiment_type(shape):
     """Detect experiment type (EELS vs 4D STEM) based on data shape
     
