@@ -66,24 +66,35 @@ jobs:
         python -c "from src.mib_viewer.io.mib_loader import load_mib; print('[OK] MIB loading functions imported')"
         echo "=== Application imports successful ==="
     
+    - name: Extract version number
+      id: get-version
+      run: |
+        echo "=== Extracting Version Number ==="
+        $version = python -c "import sys; sys.path.append('src'); from mib_viewer import __version__; print(__version__)"
+        echo "Detected version: $version"
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+        echo "VERSION=$version" >> $env:GITHUB_ENV
+
     - name: Build executable with multiple strategies
       run: |
-        echo "=== Building Windows Executable ==="
+        echo "=== Building Windows Executable (v${{ env.VERSION }}) ==="
         echo "Strategy 1: Using PyInstaller spec file..."
         if (Test-Path "MibViewer.spec") {
           pyinstaller MibViewer.spec --distpath dist --workpath build
           if (Test-Path "dist/MibViewer-Windows.exe") {
+            # Rename to include version
+            Move-Item "dist/MibViewer-Windows.exe" "dist/MibViewer-Windows-v${{ env.VERSION }}.exe"
             echo "[SUCCESS] Strategy 1: Spec file build completed"
-            $exe_size = (Get-Item "dist/MibViewer-Windows.exe").Length / 1MB
+            $exe_size = (Get-Item "dist/MibViewer-Windows-v${{ env.VERSION }}.exe").Length / 1MB
             echo "Executable size: $($exe_size.ToString('F1')) MB"
           } else {
             echo "[FAILED] Strategy 1: Spec file build failed"
           }
         }
-        
-        if (-not (Test-Path "dist/MibViewer.exe")) {
+
+        if (-not (Test-Path "dist/MibViewer-Windows-v${{ env.VERSION }}.exe")) {
           echo "Strategy 2: Direct PyInstaller command..."
-          pyinstaller --onefile --windowed --name=MibViewer-Windows `
+          pyinstaller --onefile --windowed --name="MibViewer-Windows-v${{ env.VERSION }}" `
             --add-data "src;src" `
             --hidden-import=mib_viewer.gui.mib_viewer_pyqtgraph `
             --hidden-import=mib_viewer.io.mib_loader `
@@ -92,13 +103,13 @@ jobs:
             --hidden-import=numpy `
             --hidden-import=h5py `
             src/mib_viewer/__main__.py
-          
-          if (Test-Path "dist/MibViewer-Windows.exe") {
+
+          if (Test-Path "dist/MibViewer-Windows-v${{ env.VERSION }}.exe") {
             echo "[SUCCESS] Strategy 2: Direct build completed"
-            $exe_size = (Get-Item "dist/MibViewer-Windows.exe").Length / 1MB
+            $exe_size = (Get-Item "dist/MibViewer-Windows-v${{ env.VERSION }}.exe").Length / 1MB
             echo "Executable size: $($exe_size.ToString('F1')) MB"
           } else {
-            echo "[FAILED] Strategy 2: Direct build failed" 
+            echo "[FAILED] Strategy 2: Direct build failed"
             exit 1
           }
         }
@@ -106,15 +117,15 @@ jobs:
     - name: Verify executable
       run: |
         echo "=== Verifying Executable ==="
-        if (Test-Path "dist/MibViewer-Windows.exe") {
-          $exe = Get-Item "dist/MibViewer-Windows.exe"
+        if (Test-Path "dist/MibViewer-Windows-v${{ env.VERSION }}.exe") {
+          $exe = Get-Item "dist/MibViewer-Windows-v${{ env.VERSION }}.exe"
           echo "[SUCCESS] Executable created successfully"
           echo "File: $($exe.Name)"
           echo "Size: $([math]::Round($exe.Length/1MB, 2)) MB"
           echo "Created: $($exe.CreationTime)"
           echo "Full path: $($exe.FullName)"
         } else {
-          echo "[ERROR] MibViewer.exe not found!"
+          echo "[ERROR] MibViewer-Windows-v${{ env.VERSION }}.exe not found!"
           echo "Contents of dist directory:"
           Get-ChildItem dist -Recurse
           exit 1
@@ -124,6 +135,6 @@ jobs:
       if: github.event.inputs.upload_artifact == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: MibViewer-Windows-exe
-        path: dist/MibViewer-Windows.exe
+        name: MibViewer-Windows-v${{ env.VERSION }}-exe
+        path: dist/MibViewer-Windows-v${{ env.VERSION }}.exe
         retention-days: 30
