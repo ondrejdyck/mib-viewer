@@ -638,6 +638,47 @@ class MibToEmdConverter:
         image_group.attrs['dimension_order'] = 'scan_y, scan_x'
         image_group.attrs['dimension_convention'] = 'MIB Viewer format: 2D image data'
 
+        # Add metadata as child of this dataset
+        self._add_dataset_metadata(image_group, metadata)
+
+    def _add_dataset_metadata(self, dataset_group, metadata: Dict) -> None:
+        """
+        Add metadata as child of the dataset group
+
+        Parameters:
+        -----------
+        dataset_group : h5py.Group
+            The dataset group (datacube_000, image_000, etc.)
+        metadata : dict
+            Metadata dictionary to store
+        """
+        if not metadata:
+            return
+
+        # Create metadata subgroup under this dataset
+        metadata_group = dataset_group.create_group('metadata')
+
+        # Store metadata (excluding complex objects)
+        for key, value in metadata.items():
+            if key == 'nion_metadata':
+                # Store original Nion metadata as pretty-printed JSON string
+                try:
+                    metadata_group.attrs['original_nion_metadata'] = json.dumps(value, indent=2, default=str)
+                except:
+                    pass  # Skip if can't serialize
+            elif value is not None:
+                try:
+                    if isinstance(value, (str, int, float, bool)):
+                        metadata_group.attrs[key] = value
+                    elif isinstance(value, (list, tuple)):
+                        metadata_group.attrs[key] = list(value)
+                    elif isinstance(value, dict):
+                        # Store simple dicts as pretty-printed JSON strings
+                        metadata_group.attrs[f"{key}_json"] = json.dumps(value, indent=2, default=str)
+                except Exception:
+                    # Skip metadata that can't be stored as HDF5 attributes
+                    pass
+
     def _add_image_metadata(self, version_group, metadata: Dict, metadata_group_name: str = "nion_metadata") -> None:
         """
         Add image-specific metadata to EMD file
@@ -991,43 +1032,16 @@ class MibToEmdConverter:
                 datacube_group.attrs['dimension_order'] = 'scan_y, scan_x, detector_y, detector_x'
                 datacube_group.attrs['dimension_convention'] = 'MIB Viewer format: EELS energy in detector_x dimension'
 
+                # Add EELS metadata as child of datacube
+                if eels_metadata:
+                    self._add_dataset_metadata(datacube_group, eels_metadata)
+
             # Add HAADF data if present (2D image)
             if has_haadf:
                 self.log(f"  Adding HAADF image: {haadf_data.shape}")
                 self._write_image_dataset(data_group, haadf_data, haadf_metadata, "image_000")
 
-            # Add metadata
-            metadata_group = version_group.create_group('metadata')
-
-            # Add EELS metadata if present
-            if has_eels and eels_metadata:
-                eels_meta_group = metadata_group.create_group('eels_metadata')
-                for key, value in eels_metadata.items():
-                    if value is not None:
-                        try:
-                            if isinstance(value, (str, int, float)):
-                                eels_meta_group.attrs[key] = value
-                            elif isinstance(value, (list, tuple)):
-                                eels_meta_group.attrs[key] = list(value)
-                        except:
-                            pass
-
-            # Add HAADF metadata if present
-            if has_haadf and haadf_metadata:
-                self._add_image_metadata(version_group, haadf_metadata, "haadf_metadata")
-
-            # Add extra metadata if provided
-            if metadata_extra:
-                extra_group = metadata_group.create_group('additional_metadata')
-                for key, value in metadata_extra.items():
-                    if value is not None:
-                        try:
-                            if isinstance(value, (str, int, float)):
-                                extra_group.attrs[key] = value
-                            elif isinstance(value, (list, tuple)):
-                                extra_group.attrs[key] = list(value)
-                        except:
-                            pass
+            # Note: Extra metadata could be added to datasets if needed in the future
 
             # Log group
             log_group = version_group.create_group('log')
@@ -1090,24 +1104,11 @@ class MibToEmdConverter:
         # Add dimension convention documentation
         datacube_group.attrs['dimension_order'] = 'scan_y, scan_x, detector_y, detector_x'
         datacube_group.attrs['dimension_convention'] = 'MIB Viewer format: EELS energy in detector_x dimension'
-        
-        # Metadata group
-        metadata_group = version_group.create_group('metadata')
-        microscope_group = metadata_group.create_group('microscope')
-        
-        # Store acquisition metadata
-        for key, value in metadata.items():
-            if value is not None:
-                try:
-                    if isinstance(value, (str, int, float)):
-                        microscope_group.attrs[key] = value
-                    elif isinstance(value, (list, tuple)):
-                        microscope_group.attrs[key] = list(value)
-                except Exception:
-                    # Skip metadata that can't be stored as HDF5 attributes
-                    pass
-        
-        # Log group
+
+        # Add metadata as child of this datacube dataset
+        self._add_dataset_metadata(datacube_group, metadata)
+
+        # Log group (at version level for file-wide info)
         log_group = version_group.create_group('log')
         log_group.attrs['conversion_date'] = time.strftime('%Y-%m-%d %H:%M:%S')
         log_group.attrs['converter_version'] = '1.0'

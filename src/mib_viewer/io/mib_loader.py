@@ -460,6 +460,159 @@ def _extract_emd_metadata(dataset_group):
     return metadata
 
 
+def walk_emd_structure(filename):
+    """
+    Walk through complete EMD file structure and extract all metadata.
+
+    Parameters:
+    -----------
+    filename : str
+        Path to EMD file
+
+    Returns:
+    --------
+    dict
+        Complete file structure with nested groups, datasets, and attributes
+        Format: {
+            'file_info': {...},
+            'structure': {...},  # Nested dict mirroring HDF5 structure
+            'flat_items': [...]  # Flat list for tree widget population
+        }
+    """
+    try:
+        import h5py
+    except ImportError:
+        raise ImportError("h5py is required to inspect EMD files. Install with: pip install h5py")
+
+    try:
+        with h5py.File(filename, 'r') as f:
+            # File-level info
+            import os
+            file_info = {
+                'filename': os.path.basename(filename),
+                'filepath': filename,
+                'filesize_bytes': os.path.getsize(filename),
+                'filesize_mb': os.path.getsize(filename) / (1024 * 1024),
+                'hdf5_version': f.attrs.get('version_major', 'unknown'),
+            }
+
+            # Extract file-level attributes
+            file_attrs = {}
+            for key, value in f.attrs.items():
+                file_attrs[key] = _convert_hdf5_value(value)
+            file_info['attributes'] = file_attrs
+
+            # Walk the complete structure
+            structure = {}
+            flat_items = []
+
+            def _walk_group(group, path='/', level=0):
+                """Recursively walk HDF5 group structure"""
+
+                # Add this group to flat list
+                group_info = {
+                    'path': path,
+                    'name': path.split('/')[-1] or 'Root',
+                    'type': 'group',
+                    'level': level,
+                    'attributes': {},
+                    'children': []
+                }
+
+                # Extract group attributes
+                for key, value in group.attrs.items():
+                    group_info['attributes'][key] = _convert_hdf5_value(value)
+
+                flat_items.append(group_info)
+
+                # Create structure entry
+                current_dict = {}
+                structure_path = path.strip('/').split('/') if path != '/' else []
+
+                # Walk through items in this group
+                for name in group.keys():
+                    item = group[name]
+                    item_path = f"{path.rstrip('/')}/{name}" if path != '/' else f"/{name}"
+
+                    if isinstance(item, h5py.Group):
+                        # Recursively process subgroups
+                        substructure = _walk_group(item, item_path, level + 1)
+                        current_dict[name] = substructure
+                        group_info['children'].append(name)
+
+                    elif isinstance(item, h5py.Dataset):
+                        # Process dataset
+                        dataset_info = {
+                            'path': item_path,
+                            'name': name,
+                            'type': 'dataset',
+                            'level': level + 1,
+                            'shape': item.shape,
+                            'dtype': str(item.dtype),
+                            'size_bytes': item.size * item.dtype.itemsize,
+                            'size_mb': (item.size * item.dtype.itemsize) / (1024 * 1024),
+                            'chunks': item.chunks,
+                            'compression': item.compression,
+                            'attributes': {}
+                        }
+
+                        # Extract dataset attributes
+                        for key, value in item.attrs.items():
+                            dataset_info['attributes'][key] = _convert_hdf5_value(value)
+
+                        # Add statistics for small datasets
+                        if dataset_info['size_mb'] < 100:  # Only for datasets < 100MB
+                            try:
+                                data_sample = item[:]
+                                if data_sample.size > 0:
+                                    dataset_info['statistics'] = {
+                                        'min': float(data_sample.min()),
+                                        'max': float(data_sample.max()),
+                                        'mean': float(data_sample.mean()),
+                                        'std': float(data_sample.std())
+                                    }
+                            except:
+                                pass
+
+                        flat_items.append(dataset_info)
+                        group_info['children'].append(name)
+                        current_dict[name] = dataset_info
+
+                return current_dict
+
+            # Start walking from root
+            structure = _walk_group(f)
+
+            return {
+                'file_info': file_info,
+                'structure': structure,
+                'flat_items': flat_items
+            }
+
+    except Exception as e:
+        raise ValueError(f"Failed to walk EMD structure: {str(e)}")
+
+
+def _convert_hdf5_value(value):
+    """Convert HDF5 attribute value to Python-serializable format"""
+    try:
+        import numpy as np
+
+        if isinstance(value, bytes):
+            return value.decode('utf-8', errors='ignore')
+        elif isinstance(value, np.ndarray):
+            if value.size == 1:
+                return value.item()
+            else:
+                return value.tolist()
+        elif hasattr(value, 'item'):
+            return value.item()
+        else:
+            return value
+    except:
+        return str(value)
+
+
 def detect_experiment_type(shape):
     """Detect experiment type (EELS vs 4D STEM) based on data shape
     

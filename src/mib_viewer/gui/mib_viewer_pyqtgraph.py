@@ -28,23 +28,25 @@ try:
     from ..io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
                                      get_mib_properties, auto_detect_scan_size, MibProperties,
                                      detect_experiment_type, apply_data_processing, calculate_processed_size,
-                                     get_valid_bin_factors, load_data_comprehensive)
+                                     get_valid_bin_factors, load_data_comprehensive, walk_emd_structure)
     from ..io.mib_to_emd_converter import MibToEmdConverter
     from .enhanced_conversion_worker import ConversionWorkerFactory
     from ..io.chunked_fft_processor import (
         Chunked4DFFTProcessor, FFTMode, create_chunked_fft_processor
     )
+    from .emd_file_inspector import EMDFileInspector
 except ImportError:
     # Fall back for direct execution
     from mib_viewer.io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
                                           get_mib_properties, auto_detect_scan_size, MibProperties,
                                           detect_experiment_type, apply_data_processing, calculate_processed_size,
-                                          get_valid_bin_factors, load_data_comprehensive)
+                                          get_valid_bin_factors, load_data_comprehensive, walk_emd_structure)
     from mib_viewer.io.mib_to_emd_converter import MibToEmdConverter
     from mib_viewer.gui.enhanced_conversion_worker import ConversionWorkerFactory
     from mib_viewer.io.chunked_fft_processor import (
         Chunked4DFFTProcessor, FFTMode, create_chunked_fft_processor
     )
+    from mib_viewer.gui.emd_file_inspector import EMDFileInspector
 
 # Configure PyQtGraph
 pg.setConfigOptions(antialias=True, useOpenGL=True)
@@ -325,7 +327,11 @@ class MibViewerPyQtGraph(QMainWindow):
         # Create MIB to EMD conversion tab
         self.conversion_tab = self.create_conversion_tab()
         self.tab_widget.addTab(self.conversion_tab, "MIB → EMD")
-        
+
+        # Create File Inspector tab
+        self.file_inspector = EMDFileInspector()
+        self.tab_widget.addTab(self.file_inspector, "File Inspector")
+
         # Create status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -1204,6 +1210,9 @@ class MibViewerPyQtGraph(QMainWindow):
         # Check for data loss warnings before loading new data
         if not self._check_data_loss_warnings("load new data"):
             return
+
+        # Clear file inspector when loading new data
+        self.file_inspector.clear()
         
         try:
             # Determine file type and show appropriate loading message
@@ -1275,6 +1284,10 @@ class MibViewerPyQtGraph(QMainWindow):
                         # EMD files: no flip needed (converter already applied flip)
                         self.eels_data = summed_data
                         self.log_message("No energy axis flip needed for EMD file")
+
+                    # Mark as processed data that could be saved
+                    self.has_unsaved_progressive_data = True
+                    self.current_progressive_data_type = 'EELS'
                 else:
                     # 3D EELS - already summed, handle energy axis based on file type
                     if file_type == "MIB":
@@ -1574,6 +1587,9 @@ class MibViewerPyQtGraph(QMainWindow):
 
             # Update all displays
             self.update_displays()
+
+            # Update file inspector with EMD structure
+            self.file_inspector.load_file_structure(filename)
 
             # Update status
             if experiment_type == "COMBINED":
@@ -4600,6 +4616,11 @@ Bright Field Disk Detection Results:
         if self.has_unsaved_progressive_data:
             if not self._warn_unsaved_progressive_data(action):
                 return False
+            else:
+                # User chose to proceed - clear the unsaved data flag
+                self.has_unsaved_progressive_data = False
+                self.current_progressive_data_type = None
+                self.log_message("Proceeding with data loss - cleared unsaved data warning state")
 
         return True
 
