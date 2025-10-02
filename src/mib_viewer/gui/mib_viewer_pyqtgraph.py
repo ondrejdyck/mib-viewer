@@ -968,7 +968,19 @@ class MibViewerPyQtGraph(QMainWindow):
         self.ndata_image_item = pg.ImageItem()
         self.ndata_plot.addItem(self.ndata_image_item)
         
+        # Create spectrum curve
         self.spectrum_curve = self.spectrum_plot.plot(pen='w')
+
+        # Store full spectrum data for responsive filtering
+        self.full_spectrum_x = None
+        self.full_spectrum_y = None
+
+        # Connect to view range changes to dynamically filter data
+        # This prevents Qt's "Painter path exceeds +/-32767 pixels" error
+        self.spectrum_plot.getViewBox().sigRangeChanged.connect(self.on_spectrum_view_changed)
+
+        # Also respond to geometry changes (window resize)
+        self.spectrum_plot.getViewBox().sigResized.connect(self.on_spectrum_view_changed)
         
         # ROI widgets (will be configured when data is loaded)
         self.setup_roi_widgets()
@@ -1743,10 +1755,76 @@ class MibViewerPyQtGraph(QMainWindow):
             spectrum_data = np.log10(np.maximum(avg_spectrum, 1e-10))
         else:
             spectrum_data = avg_spectrum
-        
-        # Update the spectrum curve (this is much faster than matplotlib!)
-        self.spectrum_curve.setData(energy_axis, spectrum_data)
-    
+
+        # Store full spectrum data for dynamic filtering
+        self.full_spectrum_x = energy_axis
+        self.full_spectrum_y = spectrum_data
+
+        # Apply initial filtering and update plot
+        self.update_spectrum_display()
+
+    def update_spectrum_display(self):
+        """Filter and display spectrum data based on current view range.
+
+        This prevents Qt's 'Painter path exceeds +/-32767 pixels' error by only
+        rendering points within a reasonable distance from the visible viewport.
+        """
+        if self.full_spectrum_x is None or self.full_spectrum_y is None:
+            return
+
+        x_data = self.full_spectrum_x
+        y_data = self.full_spectrum_y
+
+        # Get current view range
+        view_range = self.spectrum_plot.viewRange()
+        if view_range is not None and len(view_range) == 2:
+            x_min, x_max = view_range[0]
+            y_min, y_max = view_range[1]
+
+            # Calculate range sizes
+            x_range = x_max - x_min
+            y_range = y_max - y_min
+
+            # Get viewport pixel size to calculate safe buffer
+            view_box = self.spectrum_plot.getViewBox()
+            view_rect = view_box.rect()
+            pixel_height = view_rect.height()
+            pixel_width = view_rect.width()
+
+            # Calculate buffer based on staying within Qt's 32767 pixel limit
+            # Use at most 10000 pixels of buffer (safe margin below 32767)
+            if pixel_height > 0 and y_range > 0:
+                max_y_buffer_units = (10000 / pixel_height) * y_range
+                y_buffer = min(10 * y_range, max_y_buffer_units)
+            else:
+                y_buffer = 10 * y_range
+
+            if pixel_width > 0 and x_range > 0:
+                max_x_buffer_units = (10000 / pixel_width) * x_range
+                x_buffer = min(10 * x_range, max_x_buffer_units)
+            else:
+                x_buffer = 10 * x_range
+
+            # Create masks for both axes
+            x_mask = (x_data >= x_min - x_buffer) & (x_data <= x_max + x_buffer)
+            y_mask = (y_data >= y_min - y_buffer) & (y_data <= y_max + y_buffer)
+            mask = x_mask & y_mask
+
+            # Apply mask
+            filtered_x = x_data[mask]
+            filtered_y = y_data[mask]
+        else:
+            # No view range info, use full data
+            filtered_x = x_data
+            filtered_y = y_data
+
+        # Update the curve with filtered data
+        self.spectrum_curve.setData(filtered_x, filtered_y)
+
+    def on_spectrum_view_changed(self):
+        """Called when spectrum plot view range changes (zoom/pan)."""
+        self.update_spectrum_display()
+
     def on_roi_changed(self, source='eels'):
         """Handle ROI change events (including position, size, and rotation)"""
         roi = self.eels_roi if source == 'eels' else self.ndata_roi
