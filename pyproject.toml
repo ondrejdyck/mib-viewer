@@ -1,6 +1,6 @@
 [project]
 name = "mib-viewer"
-version = "0.1.0"
+version = "1.0.12"
 description = "MIB EELS Viewer - Interactive GUI for viewing MIB EELS data and ndata images"
 readme = "README.md"
 requires-python = ">=3.10"

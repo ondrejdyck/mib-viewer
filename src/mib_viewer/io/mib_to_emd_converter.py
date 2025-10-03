@@ -815,15 +815,42 @@ class MibToEmdConverter:
             datacube_group = datacubes_group.create_group('datacube_000')
             datacube_group.attrs['emd_group_type'] = 'array'
             
-            # Create main dataset with compression and progress bar
-            self.log(f"  Writing 4D dataset: {metadata['shape_4d']}")
+            # Create empty dataset first (prevents HDF5 threading issues with large arrays)
+            self.log(f"  Creating 4D dataset structure: {metadata['shape_4d']}")
             dataset = datacube_group.create_dataset(
-                'data', 
-                data=data_4d,
+                'data',
+                shape=metadata['shape_4d'],
+                dtype=data_4d.dtype,
                 chunks=chunks,
                 **compression_kwargs
             )
             dataset.attrs['units'] = 'counts'
+
+            # Write data in chunks sequentially (memory→disk, single-threaded)
+            # This avoids segfaults from HDF5 internal threading on massive arrays
+            self.log(f"  Writing data sequentially in chunks...")
+            self.update_progress(70, "Writing data to disk...")
+
+            sy, sx, qy, qx = metadata['shape_4d']
+            chunk_sy, chunk_sx = chunks[0], chunks[1]
+
+            total_chunks = ((sy + chunk_sy - 1) // chunk_sy) * ((sx + chunk_sx - 1) // chunk_sx)
+            chunk_num = 0
+
+            for y_start in range(0, sy, chunk_sy):
+                y_end = min(y_start + chunk_sy, sy)
+                for x_start in range(0, sx, chunk_sx):
+                    x_end = min(x_start + chunk_sx, sx)
+
+                    # Sequential write from in-memory data to disk
+                    dataset[y_start:y_end, x_start:x_end, :, :] = data_4d[y_start:y_end, x_start:x_end, :, :]
+
+                    chunk_num += 1
+                    if chunk_num % 10 == 0 or chunk_num == total_chunks:
+                        progress = 70 + int(25 * chunk_num / total_chunks)
+                        self.update_progress(progress, f"Writing chunk {chunk_num}/{total_chunks}...")
+
+            self.log(f"  Wrote {total_chunks} chunks successfully")
             
             # Create dimension datasets
             sy, sx, qy, qx = metadata['shape_4d']

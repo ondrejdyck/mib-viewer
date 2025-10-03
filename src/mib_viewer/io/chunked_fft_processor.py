@@ -113,6 +113,10 @@ class Chunked4DFFTProcessor:
         self.memory_safety_factor = 0.8  # Use 80% of available memory
         self.enable_adaptive_optimization = True
 
+        # Background persistence tracking
+        self.active_background_threads = []  # Track active background writes
+        self.cancellation_event = threading.Event()  # Global cancellation signal
+
         # Store progress callback for later use
         # Progress reporter will be created when we have chunking_result
 
@@ -120,6 +124,37 @@ class Chunked4DFFTProcessor:
             conservative_mode=conservative_mode,
             max_workers=max_workers
         )
+
+    def cancel_background_persistence(self, wait_timeout: float = 5.0):
+        """
+        Cancel all active background persistence operations and wait for cleanup.
+
+        This should be called when the application is closing to ensure:
+        1. Background writes are cancelled
+        2. Partial FFT data is deleted from HDF5 files
+        3. Files are properly closed
+
+        Parameters:
+        -----------
+        wait_timeout : float
+            Maximum seconds to wait for threads to finish cleanup (default: 5.0)
+        """
+        if not self.active_background_threads:
+            return
+
+        self.log(f"⚠️ Cancelling {len(self.active_background_threads)} background persistence thread(s)...")
+
+        # Signal all threads to cancel
+        self.cancellation_event.set()
+
+        # Wait for threads to cleanup (with timeout)
+        for thread in self.active_background_threads[:]:  # Copy list to avoid modification during iteration
+            if thread.is_alive():
+                thread.join(timeout=wait_timeout)
+                if thread.is_alive():
+                    self.log(f"⚠️ Thread did not finish cleanup within {wait_timeout}s", LogLevel.WARNING)
+
+        self.log("✅ All background threads cancelled and cleaned up")
 
     def calculate_memory_requirements(self, dataset_shape: Tuple[int, int, int, int]) -> Tuple[float, float]:
         """
@@ -360,6 +395,17 @@ class Chunked4DFFTProcessor:
 
         try:
             self.log("=== ADAPTIVE FFT COMPUTATION FROM MEMORY ===")
+
+            # Verify output file is accessible before doing any computation
+            self.log(f"Verifying write access to: {output_emd_path}")
+            try:
+                # Test file access - open in append mode to verify we can write
+                with h5py.File(output_emd_path, 'a') as test_f:
+                    self.log(f"  File is writable, existing groups: {list(test_f.keys())}")
+            except Exception as e:
+                raise IOError(f"Cannot access output file for writing: {output_emd_path}\n"
+                             f"Error: {str(e)}\n"
+                             f"Make sure the file is not open in another program and you have write permissions.")
 
             # Step 1: Analyze memory strategy
             memory_analysis = self.analyze_memory_strategy(
@@ -667,41 +713,52 @@ class Chunked4DFFTProcessor:
         mode_suffix = 'cropped' if mode == FFTMode.CROPPED else 'full'
         fft_group_path = f'cached/fft_4d_{mode_suffix}'
 
-        with h5py.File(output_path, 'a') as f:  # Append mode - don't overwrite existing file
-            # Remove existing FFT group if it exists (for recomputation)
-            if fft_group_path in f:
-                del f[fft_group_path]
+        try:
+            with h5py.File(output_path, 'a') as f:  # Append mode - don't overwrite existing file
+                # Ensure 'cached' parent group exists (needed for fresh EMD files)
+                if 'cached' not in f:
+                    self.log(f"Creating 'cached' group for FFT storage")
+                    f.create_group('cached')
 
-            # Create mode-specific FFT group
-            fft_group = f.create_group(fft_group_path)
+                # Remove existing FFT group if it exists (for recomputation)
+                if fft_group_path in f:
+                    self.log(f"Removing existing FFT group: {fft_group_path}")
+                    del f[fft_group_path]
 
-            # Create complex dataset for FFT results
-            # Use chunked storage for efficient access patterns
-            chunk_size = min(sy, 64), min(sx, 64), min(qy, 64), min(qx, 64)
+                # Create mode-specific FFT group
+                fft_group = f.create_group(fft_group_path)
 
-            fft_group.create_dataset(
-                'complex',
-                shape=(sy, sx, qy, qx),
-                dtype=np.complex64,
-                chunks=chunk_size,
-                compression='gzip',
-                compression_opts=1  # Light compression for speed
-            )
+                # Create complex dataset for FFT results
+                # Use chunked storage for efficient access patterns
+                chunk_size = min(sy, 64), min(sx, 64), min(qy, 64), min(qx, 64)
 
-            # Create metadata group
-            metadata_group = fft_group.create_group('metadata')
-            metadata_group.attrs['mode'] = mode.value
-            metadata_group.attrs['computation_date'] = time.strftime('%Y-%m-%d %H:%M:%S')
-            metadata_group.attrs['fft_axes'] = [0, 1]  # Scan dimensions
-            metadata_group.attrs['original_shape'] = fft_shape
+                fft_group.create_dataset(
+                    'complex',
+                    shape=(sy, sx, qy, qx),
+                    dtype=np.complex64,
+                    chunks=chunk_size,
+                    compression='gzip',
+                    compression_opts=1  # Light compression for speed
+                )
 
-            if crop_info is not None:
-                crop_group = metadata_group.create_group('crop_info')
-                for key, value in crop_info.items():
-                    if isinstance(value, (list, tuple)):
-                        crop_group.attrs[key] = np.array(value)
-                    else:
-                        crop_group.attrs[key] = value
+                # Create metadata group
+                metadata_group = fft_group.create_group('metadata')
+                metadata_group.attrs['mode'] = mode.value
+                metadata_group.attrs['computation_date'] = time.strftime('%Y-%m-%d %H:%M:%S')
+                metadata_group.attrs['fft_axes'] = [0, 1]  # Scan dimensions
+                metadata_group.attrs['original_shape'] = fft_shape
+
+                if crop_info is not None:
+                    crop_group = metadata_group.create_group('crop_info')
+                    for key, value in crop_info.items():
+                        if isinstance(value, (list, tuple)):
+                            crop_group.attrs[key] = np.array(value)
+                        else:
+                            crop_group.attrs[key] = value
+
+        except Exception as e:
+            raise IOError(f"Failed to create FFT structure in EMD file '{output_path}': {str(e)}\n"
+                         f"The file may be open in another program or corrupted.")
 
     def _apply_crop_offset_to_chunks(self, work_chunks: List[ChunkInfo],
                                    crop_bounds: Tuple[int, int, int, int]) -> List[ChunkInfo]:
@@ -980,31 +1037,63 @@ class Chunked4DFFTProcessor:
         import threading
 
         def background_write():
+            fft_group_path = f'cached/fft_4d_{mode.value}'
+            f = None
+            cancelled = False
+
             try:
                 self.log(f"💾 Starting chunked background persistence ({len(work_chunks)} chunks)...")
 
-                with h5py.File(output_path, 'r+') as f:
-                    dataset_path = self._get_fft_dataset_path(mode)
-                    output_dataset = f[dataset_path]
+                # Open file with error handling
+                try:
+                    f = h5py.File(output_path, 'r+')
+                except Exception as e:
+                    raise IOError(f"Cannot open EMD file for writing: {output_path}\nError: {str(e)}")
 
-                    # Write one chunk at a time with progress updates
-                    total_chunks = len(work_chunks)
+                dataset_path = self._get_fft_dataset_path(mode)
+                self.log(f"💾 Looking for dataset: {dataset_path}")
 
-                    for i, chunk in enumerate(work_chunks):
-                        # Write this chunk from memory to disk
-                        chunk_data = memory_data[chunk.output_slice]
-                        output_dataset[chunk.output_slice] = chunk_data
+                if dataset_path not in f:
+                    available_paths = list(f.keys())
+                    raise KeyError(f"Dataset path '{dataset_path}' not found in file.\n"
+                                 f"Available top-level paths: {available_paths}")
 
-                        # Progress update
-                        progress_percent = int(((i + 1) / total_chunks) * 100)
+                output_dataset = f[dataset_path]
+
+                # Write one chunk at a time with cancellation checks
+                total_chunks = len(work_chunks)
+
+                for i, chunk in enumerate(work_chunks):
+                    # Check for cancellation before each chunk
+                    if self.cancellation_event.is_set():
+                        cancelled = True
+                        self.log(f"⚠️ Background write cancelled at chunk {i+1}/{total_chunks}")
                         if progress_callback:
-                            progress_callback(f"💾 Background: Writing chunk {i+1}/{total_chunks} ({progress_percent}%)")
+                            progress_callback(f"⚠️ Background: Cancelled, cleaning up...")
+                        break
 
-                        self.log(f"💾 Chunk {i+1}/{total_chunks} written to disk ({progress_percent}%)")
+                    # Write this chunk from memory to disk
+                    chunk_data = memory_data[chunk.output_slice]
+                    output_dataset[chunk.output_slice] = chunk_data
 
+                    # Progress update
+                    progress_percent = int(((i + 1) / total_chunks) * 100)
+                    if progress_callback:
+                        progress_callback(f"💾 Background: Writing chunk {i+1}/{total_chunks} ({progress_percent}%)")
+
+                    self.log(f"💾 Chunk {i+1}/{total_chunks} written to disk ({progress_percent}%)")
+
+                if cancelled:
+                    # Clean up: delete partially written FFT data
+                    self.log(f"🧹 Cleaning up: Deleting partial FFT group {fft_group_path}")
+                    if fft_group_path in f:
+                        del f[fft_group_path]
+                    self.log(f"✅ Cleanup complete - EMD file restored to previous state")
+                    if progress_callback:
+                        progress_callback("✅ Background: Cancelled and cleaned up")
+                else:
                     if progress_callback:
                         progress_callback("✅ Background: Save completed")
-
                     self.log("✅ Background persistence to disk completed successfully")
 
             except Exception as e:
@@ -1013,8 +1102,24 @@ class Chunked4DFFTProcessor:
                 if progress_callback:
                     progress_callback(error_msg)
 
-        # Start background thread
+            finally:
+                # Always close file properly
+                if f is not None:
+                    try:
+                        f.close()
+                        self.log("📁 HDF5 file closed properly")
+                    except:
+                        pass
+
+                # Remove from active threads list
+                try:
+                    self.active_background_threads.remove(persistence_thread)
+                except:
+                    pass
+
+        # Start background thread and track it
         persistence_thread = threading.Thread(target=background_write, daemon=True)
+        self.active_background_threads.append(persistence_thread)
         persistence_thread.start()
 
         return persistence_thread

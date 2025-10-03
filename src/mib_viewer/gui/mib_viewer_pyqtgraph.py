@@ -1296,7 +1296,13 @@ class MibViewerPyQtGraph(QMainWindow):
             elif experiment_type == "4D_STEM":
                 # Store as 4D STEM data (no energy axis flip needed)
                 self.stem4d_data = raw_data
-                self.stem4d_filename = filename  # Store full path for EMD processing
+
+                # Only set stem4d_filename for EMD files (FFT requires EMD format)
+                # For .mib files, user must convert to EMD first
+                if filename.lower().endswith('.emd'):
+                    self.stem4d_filename = filename  # Store full path for EMD processing
+                else:
+                    self.stem4d_filename = ""  # .mib files need conversion first
 
                 # Update the 4D STEM file label
                 self.stem4d_label.setText(f"4D STEM File: {os.path.basename(filename)} ({file_type})")
@@ -3315,7 +3321,25 @@ class MibViewerPyQtGraph(QMainWindow):
             return
 
         if not hasattr(self, 'stem4d_filename') or not self.stem4d_filename:
-            QMessageBox.warning(self, "No EMD File", "Please save/load 4D STEM data as EMD file first.\nFFT requires EMD format for efficient processing.")
+            QMessageBox.warning(self, "Conversion Required",
+                              "FFT computation requires EMD format for efficient processing.\n\n"
+                              "To convert your .mib file:\n"
+                              "1. Go to the 'MIB to EMD Conversion' tab\n"
+                              "2. Convert your file to EMD format\n"
+                              "3. Load the converted .emd file in the '4D STEM' tab\n"
+                              "4. Return here to compute FFT")
+            return
+
+        # Validate that stem4d_filename is a valid HDF5/EMD file
+        try:
+            import h5py
+            with h5py.File(self.stem4d_filename, 'r') as f:
+                pass  # Just check if it opens
+        except Exception as e:
+            QMessageBox.critical(self, "Invalid EMD File",
+                               f"The file is not a valid HDF5/EMD file:\n{os.path.basename(self.stem4d_filename)}\n\n"
+                               f"Error: {str(e)}\n\n"
+                               f"Please use the 'MIB to EMD Conversion' tab to convert your file.")
             return
 
         # Check if estimation was done and crop info is needed for cropped mode
@@ -3362,11 +3386,12 @@ class MibViewerPyQtGraph(QMainWindow):
                     # Emit thread-safe signal
                     self.background_progress_updated.emit(progress, message)
 
-            # Create chunked FFT processor
+            # Create chunked FFT processor and store for cancellation on close
             processor = create_chunked_fft_processor(
                 conservative=True,
                 progress_callback=progress_callback
             )
+            self.fft_processor = processor  # Store for cleanup on app close
 
             # ADAPTIVE FFT OPTIMIZATION: Use memory-based processing when data is available
             crop_info = self.fft_crop_info if is_cropped_mode else None
@@ -3771,44 +3796,44 @@ class MibViewerPyQtGraph(QMainWindow):
     def get_fft_scan_position(self):
         """Get current scan position from selector (center point only)"""
         pos = self.fft_scan_selector_overview.pos()
-        size = self.fft_scan_selector_overview.size()
-        center_x = int(pos[0] + size[0] / 2)
-        center_y = int(pos[1] + size[1] / 2)
+        # CrosshairROI/CircleROI pos() is already the center, no size offset needed
+        center_x = int(pos[0])
+        center_y = int(pos[1])
         return (center_y, center_x)
     
     def get_fft_scan_region(self):
         """Get current spatial frequency region - returns point or region based on mode"""
         pos = self.fft_scan_selector_overview.pos()
         size = self.fft_scan_selector_overview.size()
-        
+
         sy, sx = self.fft4d_data.shape[:2]
-        
+
         if self.fft_scan_roi_mode:
             # ROI mode - return region bounds
             x1, y1 = int(pos[0]), int(pos[1])
             x2, y2 = int(pos[0] + size[0]), int(pos[1] + size[1])
-            
+
             # Ensure bounds are valid
             x1, x2 = max(0, x1), min(sx, x2)
             y1, y2 = max(0, y1), min(sy, y2)
-            
+
             return (y1, x1, y2, x2)
         else:
-            # Point mode - return center point
-            center_x = int(pos[0] + size[0] / 2)
-            center_y = int(pos[1] + size[1] / 2)
-            
+            # Point mode - CrosshairROI pos() is already the center point, don't add size offset
+            center_x = int(pos[0])
+            center_y = int(pos[1])
+
             # Ensure bounds are valid
             center_x = max(0, min(center_x, sx - 1))
             center_y = max(0, min(center_y, sy - 1))
-            
+
             return (center_y, center_x)
     
     def get_fft_freq_region(self):
         """Get current frequency region from selector"""
         pos = self.fft_freq_selector_amp.pos()
         size = self.fft_freq_selector_amp.size()
-        
+
         # Get detector dimensions - use stem4d_data if fft4d_data not available (on-the-fly mode)
         if self.fft4d_data is not None:
             qy, qx = self.fft4d_data.shape[2], self.fft4d_data.shape[3]
@@ -3816,26 +3841,26 @@ class MibViewerPyQtGraph(QMainWindow):
             qy, qx = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
         else:
             return None
-        
+
         if self.fft_freq_roi_mode:
             # ROI mode - return region
             x1, y1 = int(pos[0]), int(pos[1])
             x2, y2 = int(pos[0] + size[0]), int(pos[1] + size[1])
-            
+
             # Ensure bounds are valid
             x1, x2 = max(0, x1), min(qx, x2)
             y1, y2 = max(0, y1), min(qy, y2)
-            
+
             return (y1, x1, y2, x2)
         else:
-            # Point mode - return single point
-            center_x = int(pos[0] + size[0] / 2)
-            center_y = int(pos[1] + size[1] / 2)
-            
+            # Point mode - CrosshairROI pos() is already the center point, don't add size offset
+            center_x = int(pos[0])
+            center_y = int(pos[1])
+
             # Ensure bounds are valid
             center_x = max(0, min(center_x, qx - 1))
             center_y = max(0, min(center_y, qy - 1))
-            
+
             return (center_y, center_x, center_y + 1, center_x + 1)
     
     def on_fft_scan_changed(self, source='overview'):
@@ -4484,6 +4509,11 @@ Bright Field Disk Detection Results:
             return
 
         try:
+            # Cancel any active background FFT persistence operations
+            if hasattr(self, 'fft_processor') and self.fft_processor is not None:
+                print("Cancelling background FFT writes...")
+                self.fft_processor.cancel_background_persistence(wait_timeout=5.0)
+
             self.cleanup_memory()
         except Exception as e:
             print(f"Error during cleanup: {e}")
