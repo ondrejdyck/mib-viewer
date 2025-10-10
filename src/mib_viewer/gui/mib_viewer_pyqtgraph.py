@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
                              QMenuBar, QAction, QMenu, QStatusBar, QCheckBox, QSizePolicy,
                              QSplitter, QGroupBox, QDesktopWidget, QTabWidget, QLineEdit,
                              QComboBox, QProgressBar, QTextEdit, QGridLayout, QFrame,
-                             QRadioButton, QButtonGroup, QSpinBox, QProgressDialog)
+                             QRadioButton, QButtonGroup, QSpinBox, QProgressDialog, QDoubleSpinBox)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
 
 # Import MIB loading functions
@@ -317,7 +317,11 @@ class MibViewerPyQtGraph(QMainWindow):
         # Create 4D FFT Explorer tab
         self.fft4d_tab = self.create_4d_fft_tab()
         self.tab_widget.addTab(self.fft4d_tab, "4D FFT Explorer")
-        
+
+        # Create Super-Resolution tab
+        self.superres_tab = self.create_superres_tab()
+        self.tab_widget.addTab(self.superres_tab, "Super-Res BF")
+
         # Create MIB to EMD conversion tab
         self.conversion_tab = self.create_conversion_tab()
         self.tab_widget.addTab(self.conversion_tab, "MIB → EMD")
@@ -670,9 +674,488 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Set proportions - plots get most space, controls minimal
         main_splitter.setSizes([1400, 200])
-        
+
         return main_splitter
-    
+
+    def create_superres_tab(self):
+        """Create the Super-Resolution Bright Field tab with vertical workflow"""
+        # Initialize cached intermediate results
+        self.superres_crop_bounds = None  # (y1, y2, x1, x2) - crop bounds, not data
+        self.superres_bf_center = None
+        self.superres_bf_radius = None
+        self.superres_shift_maps = None
+        self.superres_results = None
+        self.sr_cache_manager = None  # Cache manager for bigFT storage
+        
+        # In-memory caches for interactive performance (freed when no longer needed)
+        self.sr_bigft_memory = None  # bigFT loaded in memory for Step 2 (freed in Step 3)
+
+        # Create main horizontal splitter
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        # Left side: Scrollable workflow steps
+        from PyQt5.QtWidgets import QScrollArea
+        workflow_scroll = QScrollArea()
+        workflow_scroll.setWidgetResizable(True)
+        workflow_scroll.setMinimumWidth(350)
+        workflow_scroll.setMaximumWidth(400)
+
+        workflow_widget = QWidget()
+        workflow_layout = QVBoxLayout(workflow_widget)
+        workflow_layout.setSpacing(10)
+
+        # === STEP 1: BF Detection ===
+        step1_group = QGroupBox("Step 1: BF Detection & Cropping")
+        step1_layout = QVBoxLayout(step1_group)
+
+        # Parameters
+        step1_layout.addWidget(QLabel("<b>Parameters:</b>"))
+        self.sr_auto_center = QRadioButton("Auto-detect BF center")
+        self.sr_manual_center = QRadioButton("Manual center")
+        self.sr_auto_center.setChecked(True)
+        step1_layout.addWidget(self.sr_auto_center)
+        step1_layout.addWidget(self.sr_manual_center)
+
+        step1_layout.addWidget(QLabel("BF Crop Radius (pixels):"))
+        self.sr_bf_radius = QSpinBox()
+        self.sr_bf_radius.setRange(8, 64)
+        self.sr_bf_radius.setValue(32)
+        self.sr_bf_radius.valueChanged.connect(self.invalidate_step1_onwards)
+        step1_layout.addWidget(self.sr_bf_radius)
+
+        # Action button
+        self.sr_step1_btn = QPushButton("Detect & Preview BF Region")
+        self.sr_step1_btn.clicked.connect(self.superres_step1_detect_bf)
+        self.sr_step1_btn.setEnabled(False)
+        step1_layout.addWidget(self.sr_step1_btn)
+
+        self.sr_step1_status = QLabel("Load 4D data first")
+        self.sr_step1_status.setStyleSheet("color: #666; font-size: 10px;")
+        self.sr_step1_status.setWordWrap(True)
+        step1_layout.addWidget(self.sr_step1_status)
+
+        workflow_layout.addWidget(step1_group)
+
+        # === STEP 2: Compute & Explore 4D FFT ===
+        step2_group = QGroupBox("Step 2: Compute & Explore 4D FFT")
+        step2_layout = QVBoxLayout(step2_group)
+
+        # Compute button
+        self.sr_step2_btn = QPushButton("Compute 4D FFT")
+        self.sr_step2_btn.clicked.connect(self.superres_step2_compute_fft)
+        self.sr_step2_btn.setEnabled(False)
+        step2_layout.addWidget(self.sr_step2_btn)
+
+        # Status label
+        self.sr_step2_status = QLabel("Complete Step 1 first")
+        self.sr_step2_status.setStyleSheet("color: #666; font-size: 10px;")
+        self.sr_step2_status.setWordWrap(True)
+        step2_layout.addWidget(self.sr_step2_status)
+
+        # Note: FFT Explorer widget will be created dynamically and shown in the viz panel (right side)
+        self.sr_fft_explorer_widget = None  # Created later
+
+        workflow_layout.addWidget(step2_group)
+
+        # === STEP 3: Cross-Correlations ===
+        step3_group = QGroupBox("Step 3: Cross-Correlations")
+        step3_layout = QVBoxLayout(step3_group)
+
+        step3_layout.addWidget(QLabel("<b>Parameters:</b>"))
+        step3_layout.addWidget(QLabel("Reference Smoothing (σ):"))
+        self.sr_ref_smoothing = QDoubleSpinBox()
+        self.sr_ref_smoothing.setRange(0.0, 5.0)
+        self.sr_ref_smoothing.setValue(0.5)
+        self.sr_ref_smoothing.setSingleStep(0.1)
+        self.sr_ref_smoothing.setDecimals(1)
+        self.sr_ref_smoothing.valueChanged.connect(self.invalidate_step3_onwards)
+        step3_layout.addWidget(self.sr_ref_smoothing)
+
+        self.sr_step3_btn = QPushButton("Compute Cross-Correlations")
+        self.sr_step3_btn.clicked.connect(self.superres_step3_correlations)
+        self.sr_step3_btn.setEnabled(False)
+        step3_layout.addWidget(self.sr_step3_btn)
+
+        self.sr_step3_status = QLabel("Complete Step 2 first")
+        self.sr_step3_status.setStyleSheet("color: #666; font-size: 10px;")
+        self.sr_step3_status.setWordWrap(True)
+        step3_layout.addWidget(self.sr_step3_status)
+
+        workflow_layout.addWidget(step3_group)
+
+        # === STEP 4: Shift Maps ===
+        step4_group = QGroupBox("Step 4: Shift Map Computation")
+        step4_layout = QVBoxLayout(step4_group)
+
+        self.sr_step4_btn = QPushButton("Compute Shift Maps")
+        self.sr_step4_btn.clicked.connect(self.superres_step4_shifts)
+        self.sr_step4_btn.setEnabled(False)
+        step4_layout.addWidget(self.sr_step4_btn)
+
+        self.sr_step4_status = QLabel("Complete Step 3 first")
+        self.sr_step4_status.setStyleSheet("color: #666; font-size: 10px;")
+        self.sr_step4_status.setWordWrap(True)
+        step4_layout.addWidget(self.sr_step4_status)
+
+        # Statistics display
+        self.sr_step4_stats = QLabel("")
+        self.sr_step4_stats.setStyleSheet("font-size: 10px; background: #f0f0f0; padding: 5px;")
+        self.sr_step4_stats.setWordWrap(True)
+        step4_layout.addWidget(self.sr_step4_stats)
+
+        workflow_layout.addWidget(step4_group)
+
+        # === STEP 5: Reconstruction ===
+        step5_group = QGroupBox("Step 5: Super-Resolution Reconstruction")
+        step5_layout = QVBoxLayout(step5_group)
+
+        step5_layout.addWidget(QLabel("<b>Parameters:</b>"))
+        step5_layout.addWidget(QLabel("Upscaling Factor:"))
+        self.sr_upscale = QSpinBox()
+        self.sr_upscale.setRange(1, 8)
+        self.sr_upscale.setValue(4)
+        self.sr_upscale.valueChanged.connect(self.invalidate_step5)
+        step5_layout.addWidget(self.sr_upscale)
+
+        step5_layout.addWidget(QLabel("Detector Radius (±pixels):"))
+        self.sr_det_radius = QSpinBox()
+        self.sr_det_radius.setRange(4, 32)
+        self.sr_det_radius.setValue(16)
+        self.sr_det_radius.valueChanged.connect(self.invalidate_step5)
+        step5_layout.addWidget(self.sr_det_radius)
+
+        step5_layout.addWidget(QLabel("Quality Threshold:"))
+        self.sr_quality_thresh = QDoubleSpinBox()
+        self.sr_quality_thresh.setRange(0.0, 1.0)
+        self.sr_quality_thresh.setValue(0.7)
+        self.sr_quality_thresh.setSingleStep(0.05)
+        self.sr_quality_thresh.setDecimals(2)
+        self.sr_quality_thresh.valueChanged.connect(self.invalidate_step5)
+        step5_layout.addWidget(self.sr_quality_thresh)
+
+        self.sr_step5_btn = QPushButton("Reconstruct Super-Res Image")
+        self.sr_step5_btn.clicked.connect(self.superres_step5_reconstruct)
+        self.sr_step5_btn.setEnabled(False)
+        step5_layout.addWidget(self.sr_step5_btn)
+
+        self.sr_step5_status = QLabel("Complete Step 4 first")
+        self.sr_step5_status.setStyleSheet("color: #666; font-size: 10px;")
+        self.sr_step5_status.setWordWrap(True)
+        step5_layout.addWidget(self.sr_step5_status)
+
+        workflow_layout.addWidget(step5_group)
+
+        workflow_layout.addStretch()
+        workflow_scroll.setWidget(workflow_widget)
+        main_splitter.addWidget(workflow_scroll)
+
+        # Right side: Visualization area
+        viz_widget = QWidget()
+        viz_layout = QVBoxLayout(viz_widget)
+        viz_layout.setContentsMargins(5, 5, 5, 5)
+
+        # Stacked widget to switch between different visualizations
+        from PyQt5.QtWidgets import QStackedWidget
+        self.sr_viz_stack = QStackedWidget()
+
+        # Page 0: Instructions
+        instr_widget = QLabel("Welcome to Super-Resolution Reconstruction!\n\n"
+                             "This tool uses cross-correlation analysis to achieve\n"
+                             "resolution beyond the probe size limit.\n\n"
+                             "Follow the steps on the left to:\n"
+                             "1. Detect and crop the bright field disk\n"
+                             "2. Compute cross-correlations\n"
+                             "3. Extract shift maps\n"
+                             "4. Reconstruct the super-resolved image\n\n"
+                             "Load 4D STEM data to begin.")
+        instr_widget.setAlignment(Qt.AlignCenter)
+        instr_widget.setStyleSheet("font-size: 12px; color: #666;")
+        self.sr_viz_stack.addWidget(instr_widget)
+
+        # Page 1: Step 1 visualization (BF preview)
+        step1_viz = QWidget()
+        step1_viz_layout = QGridLayout(step1_viz)
+        self.sr_diffraction_plot = pg.PlotWidget()
+        self.sr_diffraction_plot.setTitle("Sample Diffraction Pattern")
+        self.sr_diffraction_plot.setAspectLocked(True)
+        step1_viz_layout.addWidget(self.sr_diffraction_plot, 0, 0)
+        self.sr_radial_plot = pg.PlotWidget()
+        self.sr_radial_plot.setTitle("Radial Intensity Profile")
+        step1_viz_layout.addWidget(self.sr_radial_plot, 0, 1)
+        self.sr_viz_stack.addWidget(step1_viz)
+
+        # Page 2: Step 2 visualization (FFT Explorer - will be populated dynamically)
+        # The FFT explorer widget is created on-demand and inserted into sr_fft_explorer_container
+        step2_placeholder = QLabel("Compute 4D FFT in Step 2 to explore spatial frequencies")
+        step2_placeholder.setAlignment(Qt.AlignCenter)
+        step2_placeholder.setStyleSheet("font-size: 12px; color: #666;")
+        self.sr_viz_stack.addWidget(step2_placeholder)
+
+        # Page 3: Step 3 visualization (correlations)
+        step3_viz = QWidget()
+        step3_viz_layout = QGridLayout(step3_viz)
+        self.sr_reference_plot = pg.PlotWidget()
+        self.sr_reference_plot.setTitle("Reference Image (Smoothed Central Pixel)")
+        self.sr_reference_plot.setAspectLocked(True)
+        step3_viz_layout.addWidget(self.sr_reference_plot, 0, 0)
+        self.sr_correlation_plot = pg.PlotWidget()
+        self.sr_correlation_plot.setTitle("Example Correlation Map")
+        self.sr_correlation_plot.setAspectLocked(True)
+        step3_viz_layout.addWidget(self.sr_correlation_plot, 0, 1)
+        self.sr_viz_stack.addWidget(step3_viz)
+
+        # Page 4: Step 4 visualization (shift maps - MAIN FOCUS)
+        step4_viz = QWidget()
+        step4_viz_layout = QVBoxLayout(step4_viz)
+        self.sr_quiver_plot = pg.PlotWidget()
+        self.sr_quiver_plot.setTitle("Shift Vector Field (Quiver Plot)")
+        self.sr_quiver_plot.setLabel('left', 'Detector Y')
+        self.sr_quiver_plot.setLabel('bottom', 'Detector X')
+        self.sr_quiver_plot.setAspectLocked(True)
+        step4_viz_layout.addWidget(self.sr_quiver_plot)
+
+        # Small inset panels below
+        step4_insets = QWidget()
+        step4_insets_layout = QGridLayout(step4_insets)
+        self.sr_shifty_plot = pg.PlotWidget()
+        self.sr_shifty_plot.setTitle("Shift Y")
+        self.sr_shifty_plot.setAspectLocked(True)
+        step4_insets_layout.addWidget(self.sr_shifty_plot, 0, 0)
+        self.sr_shiftx_plot = pg.PlotWidget()
+        self.sr_shiftx_plot.setTitle("Shift X")
+        self.sr_shiftx_plot.setAspectLocked(True)
+        step4_insets_layout.addWidget(self.sr_shiftx_plot, 0, 1)
+        self.sr_quality_plot = pg.PlotWidget()
+        self.sr_quality_plot.setTitle("Quality Map")
+        self.sr_quality_plot.setAspectLocked(True)
+        step4_insets_layout.addWidget(self.sr_quality_plot, 0, 2)
+        step4_viz_layout.addWidget(step4_insets)
+        self.sr_viz_stack.addWidget(step4_viz)
+
+        # Page 5: Step 5 visualization (final results)
+        step5_viz = QWidget()
+        step5_viz_layout = QGridLayout(step5_viz)
+        self.sr_std_bf_plot = pg.PlotWidget()
+        self.sr_std_bf_plot.setTitle("Standard BF")
+        self.sr_std_bf_plot.setAspectLocked(True)
+        step5_viz_layout.addWidget(self.sr_std_bf_plot, 0, 0)
+        self.sr_super_bf_plot = pg.PlotWidget()
+        self.sr_super_bf_plot.setTitle("Super-Res BF")
+        self.sr_super_bf_plot.setAspectLocked(True)
+        step5_viz_layout.addWidget(self.sr_super_bf_plot, 0, 1)
+        self.sr_std_fft_plot = pg.PlotWidget()
+        self.sr_std_fft_plot.setTitle("Standard BF FFT")
+        self.sr_std_fft_plot.setAspectLocked(True)
+        step5_viz_layout.addWidget(self.sr_std_fft_plot, 1, 0)
+        self.sr_super_fft_plot = pg.PlotWidget()
+        self.sr_super_fft_plot.setTitle("Super-Res FFT (Enhanced)")
+        self.sr_super_fft_plot.setAspectLocked(True)
+        step5_viz_layout.addWidget(self.sr_super_fft_plot, 1, 1)
+        self.sr_viz_stack.addWidget(step5_viz)
+
+        viz_layout.addWidget(self.sr_viz_stack)
+        main_splitter.addWidget(viz_widget)
+
+        # Create image items for all super-res displays
+        self.sr_diffraction_item = pg.ImageItem()
+        self.sr_diffraction_plot.addItem(self.sr_diffraction_item)
+        
+        self.sr_reference_item = pg.ImageItem()
+        self.sr_reference_plot.addItem(self.sr_reference_item)
+        
+        self.sr_correlation_item = pg.ImageItem()
+        self.sr_correlation_plot.addItem(self.sr_correlation_item)
+        
+        self.sr_shifty_item = pg.ImageItem()
+        self.sr_shifty_plot.addItem(self.sr_shifty_item)
+        
+        self.sr_shiftx_item = pg.ImageItem()
+        self.sr_shiftx_plot.addItem(self.sr_shiftx_item)
+        
+        self.sr_quality_item = pg.ImageItem()
+        self.sr_quality_plot.addItem(self.sr_quality_item)
+        
+        self.sr_std_bf_item = pg.ImageItem()
+        self.sr_std_bf_plot.addItem(self.sr_std_bf_item)
+        
+        self.sr_super_bf_item = pg.ImageItem()
+        self.sr_super_bf_plot.addItem(self.sr_super_bf_item)
+        
+        self.sr_std_fft_item = pg.ImageItem()
+        self.sr_std_fft_plot.addItem(self.sr_std_fft_item)
+        
+        self.sr_super_fft_item = pg.ImageItem()
+        self.sr_super_fft_plot.addItem(self.sr_super_fft_item)
+
+        # Set proportions
+        main_splitter.setSizes([350, 1050])
+
+        return main_splitter
+
+    def create_sr_fft_explorer(self):
+        """Create the FFT Explorer widget for Super-Resolution Step 2"""
+        # Create main widget with layout
+        explorer_widget = QWidget()
+        main_layout = QVBoxLayout(explorer_widget)
+        main_layout.setContentsMargins(0, 5, 0, 0)
+
+        # Create horizontal splitter for plots and controls
+        splitter = QSplitter(Qt.Horizontal)
+
+        # === LEFT: 2x2 Plot Grid ===
+        plots_panel = QWidget()
+        plots_layout = QGridLayout(plots_panel)
+        plots_layout.setContentsMargins(5, 5, 5, 5)
+        plots_layout.setSpacing(5)
+
+        # Overview FFT (top-left) - spatial frequency map at detector center
+        overview_group = QGroupBox("Average FFT Overview")
+        overview_layout = QVBoxLayout(overview_group)
+        self.sr_fft_overview_plot = pg.PlotWidget()
+        self.sr_fft_overview_plot.setAspectLocked(True)
+        self.sr_fft_overview_plot.setLabel('left', 'Spatial Frequency Y')
+        self.sr_fft_overview_plot.setLabel('bottom', 'Spatial Frequency X')
+        overview_layout.addWidget(self.sr_fft_overview_plot)
+        plots_layout.addWidget(overview_group, 0, 0)
+
+        # Sub-selection FFT (top-right) - spatial frequency at selected detector region
+        subselect_group = QGroupBox("FFT Sub-selection")
+        subselect_layout = QVBoxLayout(subselect_group)
+        self.sr_fft_subselect_plot = pg.PlotWidget()
+        self.sr_fft_subselect_plot.setAspectLocked(True)
+        self.sr_fft_subselect_plot.setLabel('left', 'Spatial Frequency Y')
+        self.sr_fft_subselect_plot.setLabel('bottom', 'Spatial Frequency X')
+        subselect_layout.addWidget(self.sr_fft_subselect_plot)
+        plots_layout.addWidget(subselect_group, 0, 1)
+
+        # Amplitude Display (bottom-left)
+        amp_group = QGroupBox("FFT Amplitude")
+        amp_layout = QVBoxLayout(amp_group)
+        self.sr_fft_amp_plot = pg.PlotWidget()
+        self.sr_fft_amp_plot.setAspectLocked(True)
+        self.sr_fft_amp_plot.setLabel('left', 'Q_y (pixels)')
+        self.sr_fft_amp_plot.setLabel('bottom', 'Q_x (pixels)')
+        amp_layout.addWidget(self.sr_fft_amp_plot)
+        plots_layout.addWidget(amp_group, 1, 0)
+
+        # Phase Display (bottom-right)
+        phase_group = QGroupBox("FFT Phase")
+        phase_layout = QVBoxLayout(phase_group)
+        self.sr_fft_phase_plot = pg.PlotWidget()
+        self.sr_fft_phase_plot.setAspectLocked(True)
+        self.sr_fft_phase_plot.setLabel('left', 'Q_y (pixels)')
+        self.sr_fft_phase_plot.setLabel('bottom', 'Q_x (pixels)')
+        phase_layout.addWidget(self.sr_fft_phase_plot)
+        plots_layout.addWidget(phase_group, 1, 1)
+
+        splitter.addWidget(plots_panel)
+
+        # === RIGHT: Controls Panel ===
+        controls_panel = QWidget()
+        controls_panel.setMinimumWidth(180)
+        controls_panel.setMaximumWidth(220)
+        controls_layout = QVBoxLayout(controls_panel)
+
+        # Explorer Controls group
+        explorer_controls_group = QGroupBox("Explorer Controls")
+        explorer_controls_layout = QVBoxLayout(explorer_controls_group)
+
+        # Selection mode toggles
+        self.sr_fft_scan_roi_checkbox = QCheckBox("FFT ROI Mode")
+        self.sr_fft_scan_roi_checkbox.setChecked(False)
+        self.sr_fft_scan_roi_checkbox.setToolTip("Toggle between point selector and ROI for spatial frequency selection")
+        self.sr_fft_scan_roi_checkbox.toggled.connect(self.on_sr_fft_scan_roi_toggle)
+        explorer_controls_layout.addWidget(self.sr_fft_scan_roi_checkbox)
+
+        self.sr_fft_freq_roi_checkbox = QCheckBox("Ronchi ROI Mode")
+        self.sr_fft_freq_roi_checkbox.setChecked(False)
+        self.sr_fft_freq_roi_checkbox.setToolTip("Toggle between point selector and ROI for detector/Ronchi selection")
+        self.sr_fft_freq_roi_checkbox.toggled.connect(self.on_sr_fft_freq_roi_toggle)
+        explorer_controls_layout.addWidget(self.sr_fft_freq_roi_checkbox)
+
+        explorer_controls_layout.addStretch()
+        controls_layout.addWidget(explorer_controls_group)
+
+        # Info about next step
+        next_step_info = QLabel("Step 3 will be enabled automatically after FFT computation completes.\n\n"
+                                "You can review the 4D FFT here, then proceed to Step 3 in the workflow panel.")
+        next_step_info.setStyleSheet("color: #666; font-size: 10px; padding: 10px;")
+        next_step_info.setWordWrap(True)
+        next_step_info.setAlignment(Qt.AlignCenter)
+        controls_layout.addWidget(next_step_info)
+        
+        controls_layout.addStretch()
+
+        splitter.addWidget(controls_panel)
+
+        # Set proportions
+        splitter.setSizes([1200, 200])
+
+        main_layout.addWidget(splitter)
+
+        # === Initialize Image Items and Selectors ===
+        # Create image items
+        self.sr_fft_overview_item = pg.ImageItem()
+        self.sr_fft_overview_plot.addItem(self.sr_fft_overview_item)
+
+        self.sr_fft_subselect_item = pg.ImageItem()
+        self.sr_fft_subselect_plot.addItem(self.sr_fft_subselect_item)
+
+        self.sr_fft_amp_item = pg.ImageItem()
+        self.sr_fft_amp_plot.addItem(self.sr_fft_amp_item)
+
+        self.sr_fft_phase_item = pg.ImageItem()
+        self.sr_fft_phase_plot.addItem(self.sr_fft_phase_item)
+
+        # Create crosshair selectors (start in point mode)
+        # Scan selectors (red) - linked between overview and subselect
+        self.sr_fft_scan_selector_overview = pg.CrosshairROI([0, 0], size=10, pen='r')
+        self.sr_fft_scan_selector_overview.sigRegionChanged.connect(
+            lambda: self.on_sr_fft_scan_changed(source='overview')
+        )
+
+        self.sr_fft_scan_selector_subselect = pg.CrosshairROI([0, 0], size=10, pen='r')
+        self.sr_fft_scan_selector_subselect.sigRegionChanged.connect(
+            lambda: self.on_sr_fft_scan_changed(source='subselect')
+        )
+
+        # Frequency selectors (green) - linked between amp and phase
+        self.sr_fft_freq_selector_amp = pg.CrosshairROI([0, 0], size=10, pen='g')
+        self.sr_fft_freq_selector_amp.sigRegionChanged.connect(
+            lambda: self.on_sr_fft_freq_changed(source='amp')
+        )
+
+        self.sr_fft_freq_selector_phase = pg.CrosshairROI([0, 0], size=10, pen='g')
+        self.sr_fft_freq_selector_phase.sigRegionChanged.connect(
+            lambda: self.on_sr_fft_freq_changed(source='phase')
+        )
+
+        # Add selectors to plots
+        self.sr_fft_overview_plot.addItem(self.sr_fft_scan_selector_overview)
+        self.sr_fft_subselect_plot.addItem(self.sr_fft_scan_selector_subselect)
+        self.sr_fft_amp_plot.addItem(self.sr_fft_freq_selector_amp)
+        self.sr_fft_phase_plot.addItem(self.sr_fft_freq_selector_phase)
+
+        # Initially hide selectors (will be shown after data is loaded)
+        self.sr_fft_scan_selector_overview.setVisible(False)
+        self.sr_fft_scan_selector_subselect.setVisible(False)
+        self.sr_fft_freq_selector_amp.setVisible(False)
+        self.sr_fft_freq_selector_phase.setVisible(False)
+
+        # Initialize selection states
+        self.sr_fft_scan_roi_mode = False
+        self.sr_fft_freq_roi_mode = False
+
+        # Apply seismic colormap to phase display
+        try:
+            seismic_colors = [[0, 0, 255, 255], [255, 255, 255, 255], [255, 0, 0, 255]]  # Blue-White-Red
+            seismic_colormap = pg.ColorMap([0.0, 0.5, 1.0], seismic_colors)
+            self.sr_fft_phase_item.setColorMap(seismic_colormap)
+        except:
+            pass  # Fallback to default
+
+        return explorer_widget
+
     def create_conversion_tab(self):
         """Create the MIB to EMD conversion tab"""
         # Create main widget and layout
@@ -1309,6 +1792,12 @@ class MibViewerPyQtGraph(QMainWindow):
 
                 # Update FFT memory estimate
                 self.update_fft_memory_estimate()
+
+                # Update super-resolution button state
+                self.update_superres_button_state()
+
+                # Check for existing super-resolution cache files
+                self.check_for_superres_cache()
 
                 # Check for existing FFT data and auto-load if available
                 self.auto_detect_and_load_fft()
@@ -3042,6 +3531,9 @@ class MibViewerPyQtGraph(QMainWindow):
                     # Update FFT memory estimate
                     self.update_fft_memory_estimate()
 
+                    # Update super-resolution button state
+                    self.update_superres_button_state()
+
                     # Check for existing FFT data and auto-load if available
                     self.auto_detect_and_load_fft()
 
@@ -3209,6 +3701,30 @@ class MibViewerPyQtGraph(QMainWindow):
             (self.fft_amp_plot, self.fft_amp_item, "FFT Amplitude"),
             (self.fft_phase_plot, self.fft_phase_item, "FFT Phase"),
         ]
+        
+        # Add Super-Resolution tab items if they exist
+        if hasattr(self, 'sr_diffraction_plot'):
+            plot_widgets_and_items.extend([
+                (self.sr_diffraction_plot, self.sr_diffraction_item, "SR: Diffraction Pattern"),
+                (self.sr_reference_plot, self.sr_reference_item, "SR: Reference Image"),
+                (self.sr_correlation_plot, self.sr_correlation_item, "SR: Correlation Map"),
+                (self.sr_shifty_plot, self.sr_shifty_item, "SR: Shift Y"),
+                (self.sr_shiftx_plot, self.sr_shiftx_item, "SR: Shift X"),
+                (self.sr_quality_plot, self.sr_quality_item, "SR: Quality Map"),
+                (self.sr_std_bf_plot, self.sr_std_bf_item, "SR: Standard BF"),
+                (self.sr_super_bf_plot, self.sr_super_bf_item, "SR: Super-Res BF"),
+                (self.sr_std_fft_plot, self.sr_std_fft_item, "SR: Standard FFT"),
+                (self.sr_super_fft_plot, self.sr_super_fft_item, "SR: Super-Res FFT"),
+            ])
+        
+        # Add Super-Resolution FFT Explorer items if they exist (created dynamically)
+        if hasattr(self, 'sr_fft_overview_plot'):
+            plot_widgets_and_items.extend([
+                (self.sr_fft_overview_plot, self.sr_fft_overview_item, "SR FFT: Overview"),
+                (self.sr_fft_subselect_plot, self.sr_fft_subselect_item, "SR FFT: Sub-selection"),
+                (self.sr_fft_amp_plot, self.sr_fft_amp_item, "SR FFT: Amplitude"),
+                (self.sr_fft_phase_plot, self.sr_fft_phase_item, "SR FFT: Phase"),
+            ])
         
         # Setup context menu for each plot widget
         for plot_widget, image_item, display_name in plot_widgets_and_items:
@@ -3975,6 +4491,1035 @@ class MibViewerPyQtGraph(QMainWindow):
             self.estimate_fft_btn.setEnabled(False)
             self.compute_fft_btn.setEnabled(False)
 
+    def update_superres_button_state(self):
+        """Update super-resolution button when 4D data is loaded"""
+        if self.stem4d_data is not None:
+            self.sr_step1_btn.setEnabled(True)
+            self.sr_step1_status.setText("Ready - click to detect BF region")
+        else:
+            self.sr_step1_btn.setEnabled(False)
+            self.sr_step1_status.setText("Load 4D STEM data first")
+
+    # === INVALIDATION METHODS ===
+
+    def invalidate_step1_onwards(self):
+        """Invalidate Steps 2, 3, 4 when Step 1 parameters change"""
+        # Clear cached data
+        self.superres_crop_bounds = None
+        self.superres_bf_center = None
+        self.superres_bf_radius = None
+        self.superres_correlations = None
+        self.superres_shift_maps = None
+        self.superres_results = None
+
+        # Disable downstream steps
+        self.sr_step2_btn.setEnabled(False)
+        self.sr_step2_status.setText("Re-run Step 1 first")
+        self.sr_step3_btn.setEnabled(False)
+        self.sr_step3_status.setText("Complete Step 2 first")
+        self.sr_step4_btn.setEnabled(False)
+        self.sr_step4_status.setText("Complete Step 3 first")
+
+    def invalidate_step3_onwards(self):
+        """Invalidate Steps 4, 5 when Step 3 parameters change"""
+        self.superres_correlations = None
+        self.superres_shift_maps = None
+        self.superres_results = None
+
+        self.sr_step3_btn.setEnabled(False)
+        self.sr_step3_status.setText("Re-run Step 2 first")
+        self.sr_step4_btn.setEnabled(False)
+        self.sr_step4_status.setText("Complete Step 3 first")
+
+    def invalidate_step5(self):
+        """Invalidate Step 5 when its parameters change"""
+        self.superres_results = None
+        # Step 4 button stays enabled (can re-run with new parameters)
+
+    # === STEP IMPLEMENTATIONS ===
+
+    def superres_step1_detect_bf(self):
+        """Step 1: Detect BF center and preview crop region"""
+        if self.stem4d_data is None:
+            return
+
+        try:
+            from ..processing.superres_processor import SuperResProcessor
+
+            self.sr_step1_btn.setEnabled(False)
+            self.sr_step1_status.setText("Detecting BF center...")
+            QApplication.processEvents()
+
+            processor = SuperResProcessor()
+
+            # Find BF center (only loads one frame, not entire dataset)
+            bf_center = processor.find_bf_center(self.stem4d_data)
+
+            # Get diffraction pattern for radius detection
+            frame = self.stem4d_data[0, 0, :, :]
+
+            # Compute radial profile to auto-detect BF radius
+            import numpy as np
+            u, v = np.meshgrid(np.arange(frame.shape[1]), np.arange(frame.shape[0]))
+            r = np.sqrt((u - bf_center[1])**2 + (v - bf_center[0])**2)
+            r_int = r.astype(int)
+            max_r = min(100, int(np.max(r_int)))
+
+            # Clip r_int to max_r to avoid index out of bounds
+            r_int_clipped = np.clip(r_int, 0, max_r)
+
+            sums = np.zeros(max_r + 1)
+            norms = np.zeros(max_r + 1)
+            np.add.at(sums, r_int_clipped.flat, frame.flat)
+            np.add.at(norms, r_int_clipped.flat, 1)
+            valid = norms > 0
+            radial = np.zeros_like(sums)
+            radial[valid] = sums[valid] / norms[valid]
+
+            # Calculate derivative of radial profile to detect BF edge
+            radial_derivative = np.gradient(radial[:max_r])
+            max_deriv_idx = np.argmax(np.abs(radial_derivative))
+
+            # Auto-detect BF radius from derivative and update UI parameter
+            detected_radius = int(max_deriv_idx)
+            self.sr_bf_radius.setValue(detected_radius)
+            bf_radius = detected_radius
+
+            # Calculate crop bounds (don't actually crop yet - keep data memory-mapped)
+            cy, cx = int(bf_center[0]), int(bf_center[1])
+            sy, sx = self.stem4d_data.shape[0], self.stem4d_data.shape[1]
+            det_y, det_x = self.stem4d_data.shape[2], self.stem4d_data.shape[3]
+            y1 = max(0, cy - bf_radius)
+            y2 = min(det_y, cy + bf_radius)
+            x1 = max(0, cx - bf_radius)
+            x2 = min(det_x, cx + bf_radius)
+
+            # Cache metadata only (not the actual data!)
+            self.superres_crop_bounds = (y1, y2, x1, x2)
+            self.superres_bf_center = bf_center
+            self.superres_bf_radius = bf_radius
+
+            # Visualize: Show diffraction pattern with BF marked
+            self.sr_diffraction_item.setImage(frame.T)
+            
+            # Clear overlays and re-add
+            for item in self.sr_diffraction_plot.items():
+                if item != self.sr_diffraction_item:
+                    self.sr_diffraction_plot.removeItem(item)
+
+            # Mark BF center
+            # bf_center is (y, x) in array coords, but after .T display is transposed
+            # So PyQtGraph x-axis = array y-axis, PyQtGraph y-axis = array x-axis
+            # Therefore use [bf_center[1]], [bf_center[0]] = [x], [y] for display
+            center_marker = pg.ScatterPlotItem([bf_center[1]], [bf_center[0]],
+                                               pen='r', symbol='+', size=20)
+            self.sr_diffraction_plot.addItem(center_marker)
+
+            # Draw crop region circle (swap coordinates to match transposed display)
+            ellipse = pg.EllipseROI(
+                [bf_center[1]-bf_radius, bf_center[0]-bf_radius],
+                [2*bf_radius, 2*bf_radius],
+                pen='r',
+                movable=False
+            )
+            self.sr_diffraction_plot.addItem(ellipse)
+
+            self.sr_radial_plot.clear()
+            # Plot intensity profile
+            self.sr_radial_plot.plot(radial[:max_r], pen='b', name='Intensity')
+            # Plot derivative (scaled to fit on same plot)
+            deriv_scale = np.max(radial) / (np.max(np.abs(radial_derivative)) + 1e-10)
+            self.sr_radial_plot.plot(radial_derivative * deriv_scale, pen='g', name='Derivative (scaled)')
+            # Mark BF radius parameter
+            self.sr_radial_plot.plot([bf_radius, bf_radius], [0, np.max(radial)],
+                                     pen=pg.mkPen('r', style=Qt.DashLine), name='BF Radius (param)')
+            # Mark derivative maximum
+            self.sr_radial_plot.plot([max_deriv_idx, max_deriv_idx], [0, np.max(radial)],
+                                     pen=pg.mkPen('m', style=Qt.DashLine), name='Max Derivative')
+            self.sr_radial_plot.setLabel('left', 'Intensity')
+            self.sr_radial_plot.setLabel('bottom', 'Radius (pixels)')
+            self.sr_radial_plot.addLegend()
+
+            # Switch to Step 1 visualization
+            self.sr_viz_stack.setCurrentIndex(1)
+
+            # Enable Step 2
+            self.sr_step2_btn.setEnabled(True)
+            self.sr_step1_status.setText(f"✓ BF center: ({bf_center[0]:.1f}, {bf_center[1]:.1f})")
+            self.sr_step1_status.setStyleSheet("color: green; font-size: 10px;")
+            self.sr_step2_status.setText("Ready - click to compute 4D FFT")
+
+            crop_shape = (sy, sx, y2-y1, x2-x1)
+            self.log_message(f"Super-res Step 1: BF detected at {bf_center}, crop shape: {crop_shape}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Step 1 failed:\n{str(e)}")
+            self.sr_step1_status.setText(f"Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            self.sr_step1_btn.setEnabled(True)
+
+    # ========== Super-Resolution Step 2: FFT Explorer Methods ==========
+
+    def load_sr_bigft_to_memory(self, cache_manager):
+        """Load bigFT into memory if it fits, for fast interactive display"""
+        import psutil
+        import gc
+        
+        metadata = cache_manager.get_metadata()
+        cropped_shape = metadata.cropped_data_shape
+        sy, sx, qy, qx = cropped_shape
+        
+        # Calculate bigFT size
+        bigft_size_gb = (sy * sx * qy * qx * 16) / (1024**3)  # complex128 = 16 bytes
+        
+        # Get available memory
+        available_gb = psutil.virtual_memory().available / (1024**3)
+        
+        # Load into memory if we have 2x the required space (safety margin)
+        if available_gb > bigft_size_gb * 2:
+            self.log_message(f"Loading bigFT into memory ({bigft_size_gb:.2f} GB) for fast display...")
+            try:
+                self.sr_bigft_memory = cache_manager.read_bigft()
+                self.log_message(f"✓ bigFT loaded into memory. Available RAM: {available_gb:.1f} GB")
+                return True
+            except Exception as e:
+                self.log_message(f"⚠ Failed to load bigFT into memory: {e}")
+                self.sr_bigft_memory = None
+                gc.collect()
+                return False
+        else:
+            self.log_message(f"⚠ Insufficient memory to load bigFT ({bigft_size_gb:.2f} GB needed, {available_gb:.1f} GB available)")
+            self.log_message("  Using disk-based access (slower but memory-safe)")
+            self.sr_bigft_memory = None
+            return False
+    
+    def free_sr_bigft_memory(self):
+        """Free bigFT from memory to save RAM"""
+        import gc
+        if self.sr_bigft_memory is not None:
+            size_gb = (self.sr_bigft_memory.nbytes) / (1024**3)
+            self.sr_bigft_memory = None
+            gc.collect()
+            self.log_message(f"✓ Freed bigFT from memory ({size_gb:.2f} GB)")
+
+    def setup_sr_fft_displays(self, cache_manager):
+        """Setup SR FFT displays after computation - center selectors and show initial data"""
+        # Get shape from cache metadata
+        metadata = cache_manager.get_metadata()
+        cropped_shape = metadata.cropped_data_shape
+        sy, sx, qy, qx = cropped_shape
+
+        # Try to load bigFT into memory for fast interactive display
+        self.load_sr_bigft_to_memory(cache_manager)
+
+        # Center scan selectors
+        scan_center_x, scan_center_y = sx // 2, sy // 2
+        self.sr_fft_scan_selector_overview.setPos([scan_center_x - 5, scan_center_y - 5])
+        self.sr_fft_scan_selector_subselect.setPos([scan_center_x - 5, scan_center_y - 5])
+
+        # Center frequency selectors
+        freq_center_x, freq_center_y = qx // 2, qy // 2
+        self.sr_fft_freq_selector_amp.setPos([freq_center_x - 5, freq_center_y - 5])
+        self.sr_fft_freq_selector_phase.setPos([freq_center_x - 5, freq_center_y - 5])
+
+        # Show selectors now that they're positioned
+        self.sr_fft_scan_selector_overview.setVisible(True)
+        self.sr_fft_scan_selector_subselect.setVisible(True)
+        self.sr_fft_freq_selector_amp.setVisible(True)
+        self.sr_fft_freq_selector_phase.setVisible(True)
+
+        # Initial update
+        self.update_sr_fft_displays(cache_manager)
+
+    def update_sr_fft_displays(self, cache_manager):
+        """Update all SR FFT displays by reading from cache file or memory"""
+        # Get shape from cache
+        metadata = cache_manager.get_metadata()
+        cropped_shape = metadata.cropped_data_shape
+        sy, sx, qy, qx = cropped_shape
+
+        # Update overview - spatial frequency map at detector center
+        detector_center_y, detector_center_x = qy // 2, qx // 2
+
+        # Read single slice from memory or cache [all scan, single detector pixel]
+        if self.sr_bigft_memory is not None:
+            # Fast: read from memory
+            spatial_freq_map = self.sr_bigft_memory[:, :, detector_center_y, detector_center_x]
+        else:
+            # Slower: read from cache file
+            spatial_freq_map = cache_manager.read_bigft(
+                input_slice=(slice(None), slice(None), detector_center_y, detector_center_x)
+            )
+        # Apply fftshift to center zero frequency
+        spatial_freq_map = np.fft.fftshift(spatial_freq_map)
+        overview_data = np.log(np.abs(spatial_freq_map) + 1e-10)
+        self.sr_fft_overview_item.setImage(overview_data.T)
+
+        # Update amplitude and phase at current spatial frequency
+        spatial_freq_region = self.get_sr_fft_scan_region(cropped_shape)
+        if spatial_freq_region is not None:
+            if self.sr_fft_scan_roi_mode:
+                # ROI mode - average over selected spatial frequency region
+                ky1, kx1, ky2, kx2 = spatial_freq_region
+
+                # Read region from memory or cache
+                if self.sr_bigft_memory is not None:
+                    # Fast: read from memory
+                    fft_region = self.sr_bigft_memory[ky1:ky2, kx1:kx2, :, :]
+                else:
+                    # Slower: read from cache file
+                    fft_region = cache_manager.read_bigft(
+                        input_slice=(slice(ky1, ky2), slice(kx1, kx2), slice(None), slice(None))
+                    )
+
+                # Average over spatial frequency region
+                avg_fft_slice = np.mean(fft_region, axis=(0, 1))
+
+                # Update amplitude and phase (no fftshift - detector space)
+                amp_data = np.abs(avg_fft_slice)
+                self.sr_fft_amp_item.setImage(amp_data.T)
+
+                phase_data = np.angle(avg_fft_slice)
+                self.sr_fft_phase_item.setImage(phase_data.T)
+            else:
+                # Point mode - single spatial frequency
+                ky, kx = spatial_freq_region
+                ky = max(0, min(ky, sy - 1))
+                kx = max(0, min(kx, sx - 1))
+
+                # Read single scan position from memory or cache
+                if self.sr_bigft_memory is not None:
+                    # Fast: read from memory
+                    fft_slice = self.sr_bigft_memory[ky, kx, :, :]
+                else:
+                    # Slower: read from cache file
+                    fft_slice = cache_manager.read_bigft(
+                        input_slice=(ky, kx, slice(None), slice(None))
+                    )
+
+                # Update amplitude and phase (no fftshift - detector space)
+                amp_data = np.abs(fft_slice)
+                self.sr_fft_amp_item.setImage(amp_data.T)
+
+                phase_data = np.angle(fft_slice)
+                self.sr_fft_phase_item.setImage(phase_data.T)
+
+        # Update sub-selection
+        self.update_sr_fft_subselection(cache_manager)
+
+    def update_sr_fft_subselection(self, cache_manager):
+        """Update SR FFT sub-selection display based on frequency selector"""
+        # Get shape from cache
+        metadata = cache_manager.get_metadata()
+        cropped_shape = metadata.cropped_data_shape
+
+        # Get frequency selection region
+        freq_region = self.get_sr_fft_freq_region(cropped_shape)
+        if freq_region is None:
+            return
+
+        freq_y1, freq_x1, freq_y2, freq_x2 = freq_region
+
+        # Extract sub-region and show variation across spatial frequencies
+        if self.sr_fft_freq_roi_mode:
+            # ROI mode - average over selected detector region
+            if self.sr_bigft_memory is not None:
+                # Fast: read from memory
+                sub_fft = self.sr_bigft_memory[:, :, freq_y1:freq_y2, freq_x1:freq_x2]
+            else:
+                # Slower: read from cache file
+                sub_fft = cache_manager.read_bigft(
+                    input_slice=(slice(None), slice(None), slice(freq_y1, freq_y2), slice(freq_x1, freq_x2))
+                )
+            # Average across detector region
+            spatial_freq_map = np.mean(np.abs(sub_fft), axis=(2, 3))
+        else:
+            # Point mode - single detector pixel across all spatial frequencies
+            if self.sr_bigft_memory is not None:
+                # Fast: read from memory
+                spatial_freq_map = np.abs(self.sr_bigft_memory[:, :, freq_y1, freq_x1])
+            else:
+                # Slower: read from cache file
+                spatial_freq_map = np.abs(cache_manager.read_bigft(
+                    input_slice=(slice(None), slice(None), freq_y1, freq_x1)
+                ))
+
+        # Apply fftshift to center zero frequency in scan space
+        spatial_freq_map = np.fft.fftshift(spatial_freq_map)
+
+        # Apply log scaling
+        log_spatial_freq_map = np.log(spatial_freq_map + 1e-10)
+        self.sr_fft_subselect_item.setImage(log_spatial_freq_map.T)
+
+    def get_sr_fft_scan_region(self, cropped_shape):
+        """Get current spatial frequency region - returns point or region based on mode
+        
+        Applies coordinate transform to convert from fftshifted display coordinates
+        to unshifted cache coordinates.
+        """
+        pos = self.sr_fft_scan_selector_overview.pos()
+        size = self.sr_fft_scan_selector_overview.size()
+
+        sy, sx = cropped_shape[:2]
+
+        if self.sr_fft_scan_roi_mode:
+            # ROI mode - return region bounds
+            x1, y1 = int(pos[0]), int(pos[1])
+            x2, y2 = int(pos[0] + size[0]), int(pos[1] + size[1])
+
+            # Ensure bounds are valid
+            x1, x2 = max(0, x1), min(sx, x2)
+            y1, y2 = max(0, y1), min(sy, y2)
+
+            # Transform from fftshifted display coords to unshifted cache coords
+            # fftshift moves center to origin, so we reverse: (display - center) % size
+            cache_y1 = (y1 - sy // 2) % sy
+            cache_y2 = (y2 - sy // 2) % sy
+            cache_x1 = (x1 - sx // 2) % sx
+            cache_x2 = (x2 - sx // 2) % sx
+            
+            # Handle wraparound case (ROI crosses the boundary)
+            if cache_y2 <= cache_y1:
+                # ROI wraps around - for now, just use the first part
+                # TODO: Could handle wraparound by reading two regions
+                cache_y2 = sy
+            if cache_x2 <= cache_x1:
+                cache_x2 = sx
+
+            return (cache_y1, cache_x1, cache_y2, cache_x2)
+        else:
+            # Point mode - CrosshairROI pos() is center point
+            center_x = int(pos[0])
+            center_y = int(pos[1])
+
+            # Ensure bounds are valid
+            center_x = max(0, min(center_x, sx - 1))
+            center_y = max(0, min(center_y, sy - 1))
+
+            # Transform from fftshifted display coords to unshifted cache coords
+            cache_y = (center_y - sy // 2) % sy
+            cache_x = (center_x - sx // 2) % sx
+
+            return (cache_y, cache_x)
+
+    def get_sr_fft_freq_region(self, cropped_shape):
+        """Get current frequency region from selector"""
+        pos = self.sr_fft_freq_selector_amp.pos()
+        size = self.sr_fft_freq_selector_amp.size()
+
+        qy, qx = cropped_shape[2], cropped_shape[3]
+
+        if self.sr_fft_freq_roi_mode:
+            # ROI mode - return region
+            x1, y1 = int(pos[0]), int(pos[1])
+            x2, y2 = int(pos[0] + size[0]), int(pos[1] + size[1])
+
+            # Ensure bounds are valid
+            x1, x2 = max(0, x1), min(qx, x2)
+            y1, y2 = max(0, y1), min(qy, y2)
+
+            return (y1, x1, y2, x2)
+        else:
+            # Point mode - return single pixel as region
+            center_x = int(pos[0])
+            center_y = int(pos[1])
+
+            # Ensure bounds are valid
+            center_x = max(0, min(center_x, qx - 1))
+            center_y = max(0, min(center_y, qy - 1))
+
+            return (center_y, center_x, center_y + 1, center_x + 1)
+
+    def on_sr_fft_scan_changed(self, source='overview'):
+        """Handle SR scan position selector changes with linking"""
+        selector = self.sr_fft_scan_selector_overview if source == 'overview' else self.sr_fft_scan_selector_subselect
+        other_selector = self.sr_fft_scan_selector_subselect if source == 'overview' else self.sr_fft_scan_selector_overview
+
+        # Sync positions
+        pos = selector.pos()
+        size = selector.size()
+
+        other_selector.blockSignals(True)
+        other_selector.setPos(pos)
+        other_selector.setSize(size)
+        other_selector.blockSignals(False)
+
+        # Update displays if cache manager exists
+        if hasattr(self, 'sr_cache_manager') and self.sr_cache_manager is not None:
+            self.update_sr_fft_displays(self.sr_cache_manager)
+
+    def on_sr_fft_freq_changed(self, source='amp'):
+        """Handle SR frequency selector changes with linking"""
+        selector = self.sr_fft_freq_selector_amp if source == 'amp' else self.sr_fft_freq_selector_phase
+        other_selector = self.sr_fft_freq_selector_phase if source == 'amp' else self.sr_fft_freq_selector_amp
+
+        # Sync positions
+        pos = selector.pos()
+        size = selector.size()
+
+        other_selector.blockSignals(True)
+        other_selector.setPos(pos)
+        other_selector.setSize(size)
+        other_selector.blockSignals(False)
+
+        # Update sub-selection if cache manager exists
+        if hasattr(self, 'sr_cache_manager') and self.sr_cache_manager is not None:
+            self.update_sr_fft_subselection(self.sr_cache_manager)
+
+    def on_sr_fft_scan_roi_toggle(self, checked):
+        """Toggle between point and ROI mode for SR scan selection"""
+        self.sr_fft_scan_roi_mode = checked
+
+        # Get current positions before replacing selectors
+        overview_pos = self.sr_fft_scan_selector_overview.pos()
+        subselect_pos = self.sr_fft_scan_selector_subselect.pos()
+
+        # Remove old selectors from plots
+        self.sr_fft_overview_plot.removeItem(self.sr_fft_scan_selector_overview)
+        self.sr_fft_subselect_plot.removeItem(self.sr_fft_scan_selector_subselect)
+
+        if checked:
+            # ROI mode - use CircleROI for area selection
+            self.sr_fft_scan_selector_overview = pg.CircleROI(overview_pos, [25, 25], pen='r', removable=False)
+            self.sr_fft_scan_selector_subselect = pg.CircleROI(subselect_pos, [25, 25], pen='r', removable=False)
+        else:
+            # Point mode - use CrosshairROI for point selection
+            self.sr_fft_scan_selector_overview = pg.CrosshairROI(overview_pos, size=10, pen='r')
+            self.sr_fft_scan_selector_subselect = pg.CrosshairROI(subselect_pos, size=10, pen='r')
+
+        # Reconnect signals
+        self.sr_fft_scan_selector_overview.sigRegionChanged.connect(lambda: self.on_sr_fft_scan_changed(source='overview'))
+        self.sr_fft_scan_selector_subselect.sigRegionChanged.connect(lambda: self.on_sr_fft_scan_changed(source='subselect'))
+
+        # Add selectors back to plots
+        self.sr_fft_overview_plot.addItem(self.sr_fft_scan_selector_overview)
+        self.sr_fft_subselect_plot.addItem(self.sr_fft_scan_selector_subselect)
+
+        # Make sure they're visible
+        self.sr_fft_scan_selector_overview.setVisible(True)
+        self.sr_fft_scan_selector_subselect.setVisible(True)
+
+        # Update displays if cache manager exists
+        if hasattr(self, 'sr_cache_manager') and self.sr_cache_manager is not None:
+            self.update_sr_fft_displays(self.sr_cache_manager)
+
+    def on_sr_fft_freq_roi_toggle(self, checked):
+        """Toggle between point and ROI mode for SR frequency selection"""
+        self.sr_fft_freq_roi_mode = checked
+
+        # Get current positions before replacing selectors
+        amp_pos = self.sr_fft_freq_selector_amp.pos()
+        phase_pos = self.sr_fft_freq_selector_phase.pos()
+
+        # Remove old selectors from plots
+        self.sr_fft_amp_plot.removeItem(self.sr_fft_freq_selector_amp)
+        self.sr_fft_phase_plot.removeItem(self.sr_fft_freq_selector_phase)
+
+        if checked:
+            # ROI mode - use CircleROI for area selection
+            self.sr_fft_freq_selector_amp = pg.CircleROI(amp_pos, [40, 40], pen='g', removable=False)
+            self.sr_fft_freq_selector_phase = pg.CircleROI(phase_pos, [40, 40], pen='g', removable=False)
+        else:
+            # Point mode - use CrosshairROI for point selection
+            self.sr_fft_freq_selector_amp = pg.CrosshairROI(amp_pos, size=10, pen='g')
+            self.sr_fft_freq_selector_phase = pg.CrosshairROI(phase_pos, size=10, pen='g')
+
+        # Reconnect signals
+        self.sr_fft_freq_selector_amp.sigRegionChanged.connect(lambda: self.on_sr_fft_freq_changed(source='amp'))
+        self.sr_fft_freq_selector_phase.sigRegionChanged.connect(lambda: self.on_sr_fft_freq_changed(source='phase'))
+
+        # Add selectors back to plots
+        self.sr_fft_amp_plot.addItem(self.sr_fft_freq_selector_amp)
+        self.sr_fft_phase_plot.addItem(self.sr_fft_freq_selector_phase)
+
+        # Make sure they're visible
+        self.sr_fft_freq_selector_amp.setVisible(True)
+        self.sr_fft_freq_selector_phase.setVisible(True)
+
+        # Update sub-selection if cache manager exists
+        if hasattr(self, 'sr_cache_manager') and self.sr_cache_manager is not None:
+            self.update_sr_fft_subselection(self.sr_cache_manager)
+
+    def check_for_superres_cache(self):
+        """Check for existing super-resolution cache files and offer to resume"""
+        # Only check if we have an EMD file loaded
+        if not hasattr(self, 'stem4d_filename') or not self.stem4d_filename:
+            return
+
+        if not self.stem4d_filename.lower().endswith('.emd'):
+            return
+
+        try:
+            from ..processing.superres_cache import SuperResCacheManager
+
+            # Find cache files for this EMD
+            cache_files = SuperResCacheManager.find_cache_files(self.stem4d_filename)
+
+            if not cache_files:
+                return  # No cache files found
+
+            # Get info from most recent cache file
+            cache_path = cache_files[0]  # Already sorted by timestamp (most recent first)
+            cache_info = SuperResCacheManager.get_cache_info(cache_path)
+
+            # Ask user if they want to resume
+            from PyQt5.QtWidgets import QMessageBox
+
+            reply = QMessageBox.question(
+                self,
+                "Resume Super-Resolution?",
+                f"Found existing cache file:\n\n"
+                f"{os.path.basename(cache_path)}\n"
+                f"Created: {cache_info['timestamp']}\n"
+                f"Completed: Step {cache_info['step_completed']}\n"
+                f"Size: {cache_info['cache_size_gb']:.2f} GB\n\n"
+                f"Would you like to resume from this cache?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+
+            if reply == QMessageBox.Yes:
+                self.resume_from_cache(cache_path)
+
+        except Exception as e:
+            self.log_message(f"Error checking for cache files: {str(e)}")
+
+    def resume_from_cache(self, cache_path):
+        """Resume super-resolution workflow from existing cache file"""
+        try:
+            from ..processing.superres_cache import SuperResCacheManager
+
+            # Open existing cache file
+            cache_manager = SuperResCacheManager(
+                emd_path=self.stem4d_filename,
+                create_new=False
+            )
+            cache_manager.cache_path = cache_path
+            cache_manager.open_existing()
+
+            # Get metadata
+            metadata = cache_manager.get_metadata()
+
+            # Store cache manager
+            self.sr_cache_manager = cache_manager
+
+            # Restore cropped data (we need this for subsequent steps)
+            # We can't restore the full cropped array, but we can restore the metadata
+            # and let the user re-run Step 1 if needed, or restore from the cache
+
+            # Update Step 1 UI based on metadata
+            self.sr_bf_radius.setValue(metadata.bf_radius)
+            self.superres_bf_center = metadata.bf_center
+
+            # Mark Step 1 as completed
+            self.sr_step1_status.setText(f"✓ BF center: ({metadata.bf_center[0]:.1f}, {metadata.bf_center[1]:.1f})")
+            self.sr_step1_status.setStyleSheet("color: green; font-size: 10px;")
+
+            # Enable Step 2
+            self.sr_step2_btn.setEnabled(True)
+            self.sr_step2_status.setText("Cache loaded - click to explore FFT")
+
+            # If Step 2 completed, show FFT explorer
+            if metadata.step_completed >= 2:
+                # Create FFT explorer if not already created
+                if self.sr_fft_explorer_widget is None:
+                    self.sr_fft_explorer_widget = self.create_sr_fft_explorer()
+                    container_layout = QVBoxLayout(self.sr_fft_explorer_container)
+                    container_layout.setContentsMargins(0, 0, 0, 0)
+                    container_layout.addWidget(self.sr_fft_explorer_widget)
+
+                # Setup displays
+                self.setup_sr_fft_displays(cache_manager)
+                self.sr_fft_explorer_container.setVisible(True)
+
+                # Update status
+                self.sr_step2_status.setText("✓ 4D FFT loaded from cache")
+                self.sr_step2_status.setStyleSheet("color: green; font-size: 10px;")
+                
+                # Enable Step 3
+                self.sr_step3_btn.setEnabled(True)
+                self.sr_step3_status.setText("Ready - click to compute cross-correlations")
+                self.sr_step3_status.setStyleSheet("color: green; font-size: 10px;")
+                self.sr_step2_status.setStyleSheet("color: green; font-size: 10px;")
+
+                # Switch to Step 2 visualization
+                self.sr_viz_stack.setCurrentIndex(2)
+
+            # If Step 3 completed, enable Step 4
+            if metadata.step_completed >= 3:
+                self.sr_step3_btn.setEnabled(True)
+                self.sr_step3_status.setText("✓ Correlations loaded from cache")
+                self.sr_step3_status.setStyleSheet("color: green; font-size: 10px;")
+                self.sr_step4_btn.setEnabled(True)
+                self.sr_step4_status.setText("Ready to compute shift maps")
+
+            self.log_message(f"Resumed from cache: {os.path.basename(cache_path)}")
+
+            # Switch to Super-Resolution tab
+            self.tab_widget.setCurrentIndex(2)  # Super-res tab
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to resume from cache:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    # ========== Super-Resolution Step 2: Compute FFT ==========
+
+    def superres_step2_compute_fft(self):
+        """Step 2: Compute 4D FFT to cache and show FFT explorer"""
+        if not hasattr(self, 'superres_crop_bounds') or self.superres_crop_bounds is None:
+            return
+
+        try:
+            from ..processing.superres_processor import SuperResProcessor
+            from ..processing.superres_cache import SuperResCacheManager
+
+            self.sr_step2_btn.setEnabled(False)
+            self.sr_step2_status.setText("Creating cache file...")
+            QApplication.processEvents()
+
+            # Create cache manager
+            cache_manager = SuperResCacheManager(
+                emd_path=self.stem4d_filename,
+                create_new=True
+            )
+
+            # Get crop info from cached metadata
+            bf_center = self.superres_bf_center
+            bf_radius = self.superres_bf_radius
+            y1, y2, x1, x2 = self.superres_crop_bounds
+
+            crop_info = {
+                'bounds': self.superres_crop_bounds,
+                'center': (float(bf_center[0]), float(bf_center[1])),
+                'radius': bf_radius
+            }
+
+            # Calculate cropped shape
+            sy, sx = self.stem4d_data.shape[0], self.stem4d_data.shape[1]
+            crop_dy = y2 - y1
+            crop_dx = x2 - x1
+            cropped_shape = (sy, sx, crop_dy, crop_dx)
+
+            # Create cache file with metadata
+            cache_manager.create_cache_file(
+                crop_info=crop_info,
+                original_shape=self.stem4d_data.shape,
+                cropped_shape=cropped_shape,
+                reference_smoothing=self.sr_ref_smoothing.value()
+            )
+
+            self.sr_step2_status.setText("Computing 4D FFT to cache (this may take several minutes)...")
+            QApplication.processEvents()
+
+            # Compute bigFT to cache (passes memory-mapped data, not loaded array!)
+            processor = SuperResProcessor()
+            central_image = processor.compute_bigft_to_cache(
+                data_4d_full=self.stem4d_data,  # Memory-mapped, not loaded!
+                crop_bounds=self.superres_crop_bounds,
+                cache_manager=cache_manager,
+                reference_smoothing=self.sr_ref_smoothing.value()
+            )
+
+            # Store cache manager reference for display updates
+            self.sr_cache_manager = cache_manager
+
+            # Create FFT explorer widget if not already created
+            if self.sr_fft_explorer_widget is None:
+                self.sr_fft_explorer_widget = self.create_sr_fft_explorer()
+                # Replace the placeholder at index 2 with the FFT explorer
+                self.sr_viz_stack.removeWidget(self.sr_viz_stack.widget(2))
+                self.sr_viz_stack.insertWidget(2, self.sr_fft_explorer_widget)
+                
+                # Setup colormap context menus for the newly created FFT explorer plots
+                self.setup_colormap_context_menus()
+
+            # Setup displays and show explorer
+            self.setup_sr_fft_displays(cache_manager)
+
+            # Update status and enable Step 3
+            self.sr_step2_status.setText(f"✓ 4D FFT computed and cached")
+            self.sr_step2_status.setStyleSheet("color: green; font-size: 10px;")
+            
+            # Enable Step 3 button
+            self.sr_step3_btn.setEnabled(True)
+            self.sr_step3_status.setText("Ready - click to compute cross-correlations")
+            self.sr_step3_status.setStyleSheet("color: green; font-size: 10px;")
+
+            # Switch to Step 2 visualization (FFT explorer)
+            self.sr_viz_stack.setCurrentIndex(2)
+
+            self.log_message(f"Super-res Step 2: bigFT computed to cache {cache_manager.cache_path}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Step 2 failed:\n{str(e)}")
+            self.sr_step2_status.setText(f"Error: {str(e)}")
+            self.sr_step2_status.setStyleSheet("color: red; font-size: 10px;")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            self.sr_step2_btn.setEnabled(True)
+
+    def superres_step3_correlations(self):
+        """Step 3: Compute cross-correlations from cached bigFT"""
+        if self.sr_cache_manager is None or not hasattr(self, 'superres_crop_bounds'):
+            return
+
+        try:
+            from ..processing.superres_processor import SuperResProcessor
+
+            self.sr_step3_btn.setEnabled(False)
+            self.sr_step3_status.setText("Computing cross-correlations from cache...")
+            QApplication.processEvents()
+            
+            # Free bigFT from memory - no longer needed for interactive display
+            self.free_sr_bigft_memory()
+
+            processor = SuperResProcessor()
+
+            # Get reference image from Step 2 (it was returned by compute_bigft_to_cache)
+            # We need to recompute it since we didn't store it
+            y1, y2, x1, x2 = self.superres_crop_bounds
+            dy, dx = y2 - y1, x2 - x1
+            w_y, w_x = dy // 2, dx // 2
+            
+            from scipy.ndimage import gaussian_filter
+            import numpy as np
+            
+            central_pixel_data = self.stem4d_data[:, :, y1 + w_y, x1 + w_x]
+            reference_image = gaussian_filter(central_pixel_data, self.sr_ref_smoothing.value()).astype(float)
+
+            # Compute correlations from cached bigFT
+            processor.compute_correlations_from_cache(
+                data_4d_full=self.stem4d_data,
+                crop_bounds=self.superres_crop_bounds,
+                cache_manager=self.sr_cache_manager,
+                reference_image=reference_image
+            )
+
+            # Visualize reference image
+            self.sr_reference_item.setImage(reference_image.T)
+
+            # Visualize example correlation (detector pixel offset from center)
+            # Read a single correlation slice from cache for visualization
+            # Use safe offset that won't go out of bounds
+            offset = min(10, dy//4, dx//4)  # Use smaller offset if detector region is small
+            example_y = min(dy//2 + offset, dy - 1)
+            example_x = min(dx//2 + offset, dx - 1)
+            
+            example_corr = self.sr_cache_manager.read_correlations(
+                (slice(None), slice(None), example_y, example_x)
+            )
+            self.sr_correlation_item.setImage(example_corr.T)
+
+            # Switch to Step 3 visualization
+            self.sr_viz_stack.setCurrentIndex(3)
+
+            # Enable Step 4
+            self.sr_step4_btn.setEnabled(True)
+            self.sr_step3_status.setText("✓ Cross-correlations computed and cached")
+            self.sr_step3_status.setStyleSheet("color: green; font-size: 10px;")
+            self.sr_step4_status.setText("Ready - click to compute shift maps")
+
+            self.log_message(f"Super-res Step 3: Correlations computed to cache")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Step 3 failed:\n{str(e)}")
+            self.sr_step3_status.setText(f"Error: {str(e)}")
+            self.sr_step3_status.setStyleSheet("color: red; font-size: 10px;")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            self.sr_step3_btn.setEnabled(True)
+            self.sr_step2_btn.setEnabled(True)
+
+    def superres_step4_shifts(self):
+        """Step 4: Compute shift maps from cached correlations"""
+        if self.sr_cache_manager is None:
+            return
+
+        try:
+            from ..processing.superres_processor import SuperResProcessor
+            import numpy as np
+
+            self.sr_step4_btn.setEnabled(False)
+            self.sr_step4_status.setText("Loading correlations from cache...")
+            QApplication.processEvents()
+
+            # Load correlations from cache (they fit in memory after normalization)
+            self.log_message("Loading correlations from cache...")
+            correlations = self.sr_cache_manager.read_correlations()
+            
+            self.sr_step4_status.setText("Computing shift maps...")
+            QApplication.processEvents()
+
+            processor = SuperResProcessor()
+
+            # Compute shift maps
+            xm_sub, ym_sub, im_sub = processor.find_shift_maps(
+                correlations, subpixel_refine=True
+            )
+
+            # Cache results
+            self.superres_shift_maps = (xm_sub, ym_sub, im_sub)
+
+            sy, sx = self.stem4d_data.shape[:2]
+
+            # Center the shifts
+            xm_centered = xm_sub - sy // 2
+            ym_centered = ym_sub - sx // 2
+
+            # === MAIN VISUALIZATION: QUIVER PLOT ===
+            self.sr_quiver_plot.clear()
+
+            # Subsample for clarity
+            step = 4
+            y_grid, x_grid = np.meshgrid(
+                np.arange(0, xm_centered.shape[0], step),
+                np.arange(0, xm_centered.shape[1], step),
+                indexing='ij'
+            )
+            dy_sub = xm_centered[::step, ::step]
+            dx_sub = ym_centered[::step, ::step]
+
+            # Draw quiver plot using scatter + lines
+            for i in range(dy_sub.shape[0]):
+                for j in range(dy_sub.shape[1]):
+                    x0, y0 = x_grid[i, j], y_grid[i, j]
+                    dx, dy = dx_sub[i, j], dy_sub[i, j]
+                    # Scale arrows
+                    scale = 0.5
+                    arrow = pg.ArrowItem(angle=np.degrees(np.arctan2(dy, dx)),
+                                        tipAngle=30, tailLen=scale*np.sqrt(dx**2+dy**2),
+                                        pen='b', brush='b')
+                    arrow.setPos(x0, y0)
+                    self.sr_quiver_plot.addItem(arrow)
+
+            # Inset visualizations
+            self.sr_shifty_item.setImage(xm_centered.T)
+            self.sr_shiftx_item.setImage(ym_centered.T)
+            self.sr_quality_item.setImage(im_sub.T)
+
+            # Switch to Step 4 visualization (shift maps)
+            self.sr_viz_stack.setCurrentIndex(4)
+
+            # Display statistics
+            stats_text = (f"Shift Y range: [{xm_centered.min():.1f}, {xm_centered.max():.1f}]\n"
+                         f"Shift X range: [{ym_centered.min():.1f}, {ym_centered.max():.1f}]\n"
+                         f"Quality: mean={im_sub.mean():.3f}, median={np.median(im_sub):.3f}\n"
+                         f"Quality range: [{im_sub.min():.3f}, {im_sub.max():.3f}]")
+            self.sr_step4_stats.setText(stats_text)
+
+            # Enable Step 5
+            self.sr_step5_btn.setEnabled(True)
+            self.sr_step4_status.setText("✓ Shift maps computed")
+            self.sr_step4_status.setStyleSheet("color: green; font-size: 10px;")
+            self.sr_step5_status.setText("Ready - click to reconstruct")
+            self.sr_step5_status.setStyleSheet("color: green; font-size: 10px;")
+
+            self.log_message(f"Super-res Step 4: Shift maps computed")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Step 4 failed:\n{str(e)}")
+            self.sr_step4_status.setText(f"Error: {str(e)}")
+            self.sr_step4_status.setStyleSheet("color: red; font-size: 10px;")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            self.sr_step4_btn.setEnabled(True)
+
+    def superres_step5_reconstruct(self):
+        """Step 5: Reconstruct super-resolution image"""
+        if self.superres_shift_maps is None:
+            return
+
+        try:
+            from ..processing.superres_processor import SuperResProcessor
+            import numpy as np
+
+            self.sr_step5_btn.setEnabled(False)
+            self.sr_step5_status.setText("Reconstructing...")
+            QApplication.processEvents()
+
+            processor = SuperResProcessor()
+
+            # Get parameters
+            upscale = self.sr_upscale.value()
+            det_radius = self.sr_det_radius.value()
+            quality_thresh = self.sr_quality_thresh.value()
+
+            xm_sub, ym_sub, im_sub = self.superres_shift_maps
+
+            # Reconstruct from memory-mapped data
+            superres, norm = processor.reconstruct_superres_from_memmap(
+                data_4d_full=self.stem4d_data,
+                crop_bounds=self.superres_crop_bounds,
+                xm_sub=xm_sub,
+                ym_sub=ym_sub,
+                im_sub=im_sub,
+                fac=upscale,
+                lims=det_radius,
+                thresh=quality_thresh
+            )
+
+            # Standard BF for comparison (load only central detector pixel)
+            y1, y2, x1, x2 = self.superres_crop_bounds
+            crop_dy = y2 - y1
+            crop_dx = x2 - x1
+            w_y = crop_dy // 2
+            w_x = crop_dx // 2
+            std_bf = self.stem4d_data[:, :, y1 + w_y, x1 + w_x]
+
+            # Cache results
+            self.superres_results = {
+                'superres_image': superres,
+                'standard_bf': std_bf,
+                'normalization': norm
+            }
+
+            # Visualize standard BF
+            self.sr_std_bf_item.setImage(std_bf.T)
+            self.sr_std_bf_plot.setTitle(f"Standard BF ({std_bf.shape[0]}×{std_bf.shape[1]})")
+
+            # Visualize super-res BF
+            self.sr_super_bf_item.setImage(superres.T)
+            self.sr_super_bf_plot.setTitle(f"Super-Res BF ({superres.shape[0]}×{superres.shape[1]})")
+
+            # Compute and display FFTs
+            def compute_fft_log(image):
+                fft = np.fft.fft2(image)
+                fft_shifted = np.fft.fftshift(fft)
+                fft_mag = np.abs(fft_shifted)
+                return np.log(fft_mag + 1)
+
+            std_fft = compute_fft_log(std_bf)
+            self.sr_std_fft_item.setImage(std_fft.T)
+
+            superres_fft = compute_fft_log(superres)
+            self.sr_super_fft_item.setImage(superres_fft.T)
+
+            # Switch to Step 5 visualization (final results)
+            self.sr_viz_stack.setCurrentIndex(5)
+
+            self.sr_step5_status.setText(f"✓ Reconstruction complete! ({upscale}× upscaling)")
+            self.sr_step5_status.setStyleSheet("color: green; font-size: 10px;")
+            self.log_message(f"Super-res Step 5: Reconstruction complete, {superres.shape}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Step 5 failed:\n{str(e)}")
+            self.sr_step5_status.setText(f"Error: {str(e)}")
+            self.sr_step5_status.setStyleSheet("color: red; font-size: 10px;")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            self.sr_step5_btn.setEnabled(True)
     def auto_detect_and_load_fft(self):
         """Auto-detect and load existing FFT data when EMD file is opened"""
         if not hasattr(self, 'stem4d_filename') or not self.stem4d_filename:

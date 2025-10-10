@@ -356,7 +356,7 @@ def get_valid_bin_factors(detector_size):
 
 def apply_data_processing(data_4d, processing_options):
     """Apply EELS Y-summing and/or 4D binning to data
-    
+
     Parameters:
     -----------
     data_4d : numpy.ndarray
@@ -366,31 +366,36 @@ def apply_data_processing(data_4d, processing_options):
         - 'sum_y': bool, whether to sum in Y direction
         - 'bin_factor': int, binning factor for detector dimensions
         - 'bin_method': str, 'mean' or 'sum'
-        
+
     Returns:
     --------
     numpy.ndarray : Processed data
     """
     original_shape = data_4d.shape
-    
+
+    # Detect if this is EELS data (rectangular detector with dy < dx after unscrambling)
+    sy, sx, dy, dx = data_4d.shape
+    is_eels = (dy != dx and dy < dx)
+
     # Apply binning first (if requested)
     if processing_options.get('bin_factor', 1) > 1:
-        data_4d = apply_binning(data_4d, 
+        data_4d = apply_binning(data_4d,
                                processing_options['bin_factor'],
                                processing_options.get('bin_method', 'mean'))
         print(f"Applied {processing_options['bin_factor']}x{processing_options['bin_factor']} binning: "
               f"{original_shape} → {data_4d.shape}")
-    
+
     # Apply Y-summing second (if requested)
     if processing_options.get('sum_y', False):
         data_4d = np.sum(data_4d, axis=2, keepdims=True)
         print(f"Applied Y-summing: {data_4d.shape}")
 
-        # For EELS data, flip energy axis to correct orientation when Y-summing
-        # This ensures EMD files store data with consistent energy axis orientation
+    # CRITICAL: For EELS data from MIB files, ALWAYS flip energy axis
+    # MIB files store EELS with backward energy axis, must be corrected for EMD
+    if is_eels:
         data_4d = data_4d[:, :, :, ::-1]
-        print(f"Applied energy axis flip for EELS consistency")
-    
+        print(f"Applied energy axis flip for EELS data (MIB → EMD conversion)")
+
     return data_4d
 
 

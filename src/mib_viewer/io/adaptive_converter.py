@@ -82,7 +82,9 @@ class AdaptiveMibEmdConverter:
         self.compression = compression
         self.compression_level = compression_level
         self.fixed_chunk_size = chunk_size
-        self.max_workers = max_workers
+        # CRITICAL: Force single-threaded to prevent HDF5 segfaults
+        # HDF5 has thread-safety issues even with locks - multithreading causes segfaults
+        self.max_workers = 1  # Override user setting to prevent crashes
         self.conservative_mode = conservative_mode
         self.log_callback = log_callback
         self.progress_callback = progress_callback
@@ -206,7 +208,19 @@ class AdaptiveMibEmdConverter:
             qy = qx = int(np.sqrt(detector_pixels))
         else:
             qy, qx = detector_shape
-        
+
+        # CRITICAL: Account for EELS unscrambling that load_mib() will apply
+        # load_mib() swaps dimensions when dy > dx for EELS data (lines 162-183 in mib_loader.py)
+        # We need to use the POST-unscrambling dimensions for our output file
+        if qy != qx and qy > qx:
+            # This looks like EELS data that will be unscrambled by load_mib()
+            # After unscrambling, the dimensions will be swapped
+            # Example: MIB header says 256×1024, but load_mib() produces 1024×256
+            self.log(f"Detected EELS data: MIB header reports {qy}×{qx} detector")
+            self.log(f"  After load_mib() unscrambling, data will be {qx}×{qy}")
+            self.log(f"  Using post-unscrambling dimensions for output file")
+            qy, qx = qx, qy  # Swap to match what load_mib() will produce
+
         file_shape = (scan_y, scan_x, qy, qx)
         
         return {
