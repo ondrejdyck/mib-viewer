@@ -5092,13 +5092,8 @@ class MibViewerPyQtGraph(QMainWindow):
         try:
             from ..processing.superres_cache import SuperResCacheManager
 
-            # Open existing cache file
-            cache_manager = SuperResCacheManager(
-                emd_path=self.stem4d_filename,
-                create_new=False
-            )
-            cache_manager.cache_path = cache_path
-            cache_manager.open_existing()
+            # Open existing cache file using the proper class method
+            cache_manager = SuperResCacheManager.from_existing(cache_path)
 
             # Get metadata
             metadata = cache_manager.get_metadata()
@@ -5127,13 +5122,15 @@ class MibViewerPyQtGraph(QMainWindow):
                 # Create FFT explorer if not already created
                 if self.sr_fft_explorer_widget is None:
                     self.sr_fft_explorer_widget = self.create_sr_fft_explorer()
-                    container_layout = QVBoxLayout(self.sr_fft_explorer_container)
-                    container_layout.setContentsMargins(0, 0, 0, 0)
-                    container_layout.addWidget(self.sr_fft_explorer_widget)
+                    # Replace the placeholder at index 2 with the FFT explorer
+                    self.sr_viz_stack.removeWidget(self.sr_viz_stack.widget(2))
+                    self.sr_viz_stack.insertWidget(2, self.sr_fft_explorer_widget)
+                    
+                    # Setup colormap context menus for the newly created FFT explorer plots
+                    self.setup_colormap_context_menus()
 
                 # Setup displays
                 self.setup_sr_fft_displays(cache_manager)
-                self.sr_fft_explorer_container.setVisible(True)
 
                 # Update status
                 self.sr_step2_status.setText("✓ 4D FFT loaded from cache")
@@ -5143,7 +5140,6 @@ class MibViewerPyQtGraph(QMainWindow):
                 self.sr_step3_btn.setEnabled(True)
                 self.sr_step3_status.setText("Ready - click to compute cross-correlations")
                 self.sr_step3_status.setStyleSheet("color: green; font-size: 10px;")
-                self.sr_step2_status.setStyleSheet("color: green; font-size: 10px;")
 
                 # Switch to Step 2 visualization
                 self.sr_viz_stack.setCurrentIndex(2)
@@ -5166,6 +5162,117 @@ class MibViewerPyQtGraph(QMainWindow):
             import traceback
             traceback.print_exc()
 
+    def show_cache_detection_dialog(self, cache_files):
+        """
+        Show dialog when existing cache files are found in Step 2.
+        
+        Parameters
+        ----------
+        cache_files : list of str
+            List of cache file paths (sorted newest first)
+        
+        Returns
+        -------
+        str : "load", "recompute", or "cancel"
+        """
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit
+        from PyQt5.QtCore import Qt
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Existing Cache Detected")
+        dialog.setMinimumWidth(600)
+        
+        layout = QVBoxLayout()
+        
+        # Header message
+        header = QLabel("<b>Found existing super-resolution cache file(s)</b>")
+        header.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header)
+        
+        # Cache info display
+        info_text = QTextEdit()
+        info_text.setReadOnly(True)
+        info_text.setMaximumHeight(200)
+        
+        # Get info about most recent cache
+        try:
+            from ..processing.superres_cache import SuperResCacheManager
+            cache_info = SuperResCacheManager.get_cache_info(cache_files[0])
+            
+            info_str = f"Most Recent Cache:\n\n"
+            info_str += f"File: {os.path.basename(cache_files[0])}\n"
+            info_str += f"Created: {cache_info['timestamp']}\n"
+            info_str += f"Size: {cache_info['cache_size_gb']:.2f} GB\n"
+            info_str += f"Step Completed: {cache_info['step_completed']}/5\n"
+            info_str += f"Data Shape: {cache_info['cropped_data_shape']}\n"
+            info_str += f"Has bigFT: {'Yes' if cache_info['has_bigft'] else 'No'}\n"
+            info_str += f"Has Correlations: {'Yes' if cache_info['has_correlations'] else 'No'}\n"
+            
+            if len(cache_files) > 1:
+                info_str += f"\n({len(cache_files)} total cache files found)"
+            
+            info_text.setPlainText(info_str)
+            
+        except Exception as e:
+            info_text.setPlainText(f"Error reading cache info:\n{str(e)}")
+        
+        layout.addWidget(info_text)
+        
+        # Explanation
+        explanation = QLabel(
+            "What would you like to do?\n\n"
+            "• <b>Load from Cache:</b> Resume from existing computation (fast, saves time)\n"
+            "• <b>Recompute:</b> Create new cache file (slow, but ensures fresh computation)\n"
+            "• <b>Cancel:</b> Return without doing anything"
+        )
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        load_btn = QPushButton("Load from Cache")
+        load_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
+        load_btn.clicked.connect(lambda: dialog.done(1))  # Return code 1
+        
+        recompute_btn = QPushButton("Recompute")
+        recompute_btn.setStyleSheet("background-color: #FF9800; color: white; padding: 8px;")
+        recompute_btn.clicked.connect(lambda: dialog.done(2))  # Return code 2
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("padding: 8px;")
+        cancel_btn.clicked.connect(lambda: dialog.done(0))  # Return code 0
+        
+        button_layout.addWidget(load_btn)
+        button_layout.addWidget(recompute_btn)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        dialog.setLayout(layout)
+        
+        # Show dialog and get result
+        result = dialog.exec_()
+        
+        if result == 1:
+            return "load"
+        elif result == 2:
+            return "recompute"
+        else:
+            return "cancel"
+
+    def load_from_existing_cache(self, cache_path):
+        """
+        Load super-resolution workflow from existing cache file.
+        
+        This is a wrapper around resume_from_cache for use in Step 2.
+        
+        Parameters
+        ----------
+        cache_path : str
+            Path to existing cache file
+        """
+        self.resume_from_cache(cache_path)
+
     # ========== Super-Resolution Step 2: Compute FFT ==========
 
     def superres_step2_compute_fft(self):
@@ -5176,6 +5283,25 @@ class MibViewerPyQtGraph(QMainWindow):
         try:
             from ..processing.superres_processor import SuperResProcessor
             from ..processing.superres_cache import SuperResCacheManager
+
+
+            # Check for existing cache files
+            cache_files = SuperResCacheManager.find_cache_files(self.stem4d_filename)
+            
+            if cache_files:
+                # Found existing cache(s) - show dialog
+                cache_action = self.show_cache_detection_dialog(cache_files)
+                
+                if cache_action == "load":
+                    # User chose to load from cache
+                    self.load_from_existing_cache(cache_files[0])
+                    return  # Exit - cache loaded successfully
+                
+                elif cache_action == "cancel":
+                    # User cancelled
+                    return  # Exit without doing anything
+                
+                # If cache_action == "recompute", continue below to create new cache
 
             self.sr_step2_btn.setEnabled(False)
             self.sr_step2_status.setText("Creating cache file...")
