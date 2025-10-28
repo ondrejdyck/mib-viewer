@@ -4,7 +4,7 @@ A comprehensive toolkit for analyzing MIB EELS data and 4D STEM datasets
 with interactive visualization and format conversion capabilities.
 """
 
-__version__ = "1.0.12"
+__version__ = "1.1.1"
 
 def main():
     """Main entry point for the MIB viewer GUI application."""
