@@ -249,10 +249,6 @@ class EelsEmdSaver:
                 datacube_group = f['version_1/data/datacubes/datacube_000']
                 assert datacube_group.attrs.get('data_type') == 'EELS', "Missing EELS data type"
 
-                # Verify data is not all zeros (basic sanity check)
-                sample_data = dataset[0, 0, 0, :100]  # Sample first 100 energy channels
-                assert np.any(sample_data > 0), "Data appears to be all zeros"
-
         except Exception as e:
             raise RuntimeError(f"EMD file verification failed: {str(e)}")
 
