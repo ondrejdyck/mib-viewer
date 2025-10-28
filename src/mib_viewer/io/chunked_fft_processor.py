@@ -340,7 +340,7 @@ class Chunked4DFFTProcessor:
 
             # Step 7: Process chunks in parallel
             self._process_chunks_parallel(
-                input_emd_path, output_emd_path, work_chunks, dataset_chunks, chunking_result
+                input_emd_path, output_emd_path, work_chunks, dataset_chunks, chunking_result, mode
             )
 
             computation_time = time.time() - start_time
@@ -557,7 +557,7 @@ class Chunked4DFFTProcessor:
 
         # Process with single-threaded optimization
         self._process_chunks_single_threaded_optimized(
-            input_data, output_emd_path, work_chunks, dataset_chunks, chunking_result
+            input_data, output_emd_path, work_chunks, dataset_chunks, chunking_result, mode
         )
 
         return FFTResult(
@@ -649,12 +649,28 @@ class Chunked4DFFTProcessor:
                 # Check for cropped FFT
                 cropped_path = 'cached/fft_4d_cropped/complex'
                 if cropped_path in f:
-                    result['cropped'] = True
+                    # Validate it's not all zeros (quick check on small sample)
+                    dataset = f[cropped_path]
+                    if dataset.size > 0:
+                        # Sample a small portion to check if data is valid
+                        sample = dataset[0, 0, :min(10, dataset.shape[2]), :min(10, dataset.shape[3])]
+                        if not np.all(sample == 0):
+                            result['cropped'] = True
+                        else:
+                            self.log(f"Cropped FFT exists but appears to be all zeros (corrupted)", LogLevel.WARNING)
 
                 # Check for full FFT
                 full_path = 'cached/fft_4d_full/complex'
                 if full_path in f:
-                    result['full'] = True
+                    # Validate it's not all zeros (quick check on small sample)
+                    dataset = f[full_path]
+                    if dataset.size > 0:
+                        # Sample a small portion to check if data is valid
+                        sample = dataset[0, 0, :min(10, dataset.shape[2]), :min(10, dataset.shape[3])]
+                        if not np.all(sample == 0):
+                            result['full'] = True
+                        else:
+                            self.log(f"Full FFT exists but appears to be all zeros (corrupted)", LogLevel.WARNING)
 
         except Exception as e:
             self.log(f"Could not check for existing FFT: {str(e)}", LogLevel.DEBUG)
@@ -808,7 +824,8 @@ class Chunked4DFFTProcessor:
                                output_path: str,
                                work_chunks: List[ChunkInfo],
                                dataset_chunks: List[ChunkInfo],
-                               chunking_result: ChunkingResult):
+                               chunking_result: ChunkingResult,
+                               mode: FFTMode = FFTMode.FULL):
         """Process detector chunks in parallel"""
 
         self.log(f"Computing 4D FFT chunks: {len(dataset_chunks)} chunks")
@@ -825,7 +842,9 @@ class Chunked4DFFTProcessor:
             input_dataset = input_file['version_1/data/datacubes/datacube_000/data']
 
             output_file = h5py.File(output_path, 'r+')
-            output_dataset = output_file['cached/fft_4d/complex']
+            # Use mode-specific dataset path
+            dataset_path = self._get_fft_dataset_path(mode)
+            output_dataset = output_file[dataset_path]
 
             # Thread-safe write lock
             write_lock = threading.Lock()
@@ -1220,7 +1239,8 @@ class Chunked4DFFTProcessor:
                                                  output_path: str,
                                                  work_chunks: List[ChunkInfo],
                                                  dataset_chunks: List[ChunkInfo],
-                                                 chunking_result: ChunkingResult):
+                                                 chunking_result: ChunkingResult,
+                                                 mode: FFTMode = FFTMode.FULL):
         """
         Process chunks single-threaded with large chunks for I/O efficiency
         (Scenario B implementation)
@@ -1233,7 +1253,9 @@ class Chunked4DFFTProcessor:
         try:
             # Open output file ONCE
             output_file = h5py.File(output_path, 'r+')
-            output_dataset = output_file['cached/fft_4d/complex']
+            # Use mode-specific dataset path
+            dataset_path = self._get_fft_dataset_path(mode)
+            output_dataset = output_file[dataset_path]
 
             # Process chunks sequentially (no threading, no lock needed)
             for i, (dataset_chunk, work_chunk) in enumerate(zip(dataset_chunks, work_chunks)):
@@ -1289,8 +1311,23 @@ class Chunked4DFFTProcessor:
             mode_suffix = 'cropped' if mode == FFTMode.CROPPED else 'full'
             metadata_path = f'cached/fft_4d_{mode_suffix}/metadata'
 
+            # Validate dataset exists before attempting to load
+            if dataset_path not in f:
+                raise KeyError(f"FFT dataset not found at path: {dataset_path}\n"
+                             f"The file may have corrupted FFT data. Try recomputing the FFT.")
+            
+            if metadata_path not in f:
+                raise KeyError(f"FFT metadata not found at path: {metadata_path}\n"
+                             f"The file may have corrupted FFT data. Try recomputing the FFT.")
+
             # Load complex FFT data
             fft_data = f[dataset_path][:]
+            
+            # Validate data is not all zeros (common corruption indicator)
+            if fft_data.size > 0 and np.all(fft_data == 0):
+                raise ValueError(f"FFT data exists but contains only zeros.\n"
+                               f"This indicates corrupted or incomplete FFT computation.\n"
+                               f"Please recompute the FFT.")
 
             # Load metadata
             metadata = {}
