@@ -64,6 +64,9 @@ tmp/
 
 # Test outputs
 test_outputs/
+*.png
+*_test.emd
+debug_*.emd
 
 # Example data files (large, not for repo)
 *.mib
@@ -80,3 +83,6 @@ PROGRESSIVE_EELS_IMPLEMENTATION_NOTES.md
 # Deprecated code and experiments (not for repo)
 deprecated_v2_files/
 experiments/
+
+# Archive directory (development artifacts)
+archive/
