@@ -33,6 +33,7 @@ try:
     from ..io.chunked_fft_processor import (
         Chunked4DFFTProcessor, FFTMode, create_chunked_fft_processor
     )
+    from .emd_file_inspector import EMDFileInspector
 except ImportError:
     # Fall back for direct execution
     from mib_viewer.io.mib_loader import (load_mib, load_emd, load_data_file, get_data_file_info,
@@ -44,6 +45,7 @@ except ImportError:
     from mib_viewer.io.chunked_fft_processor import (
         Chunked4DFFTProcessor, FFTMode, create_chunked_fft_processor
     )
+    from mib_viewer.gui.emd_file_inspector import EMDFileInspector
 
 # Configure PyQtGraph
 pg.setConfigOptions(antialias=True, useOpenGL=True)
@@ -325,6 +327,10 @@ class MibViewerPyQtGraph(QMainWindow):
         # Create MIB to EMD conversion tab
         self.conversion_tab = self.create_conversion_tab()
         self.tab_widget.addTab(self.conversion_tab, "MIB → EMD")
+        
+        # Create File Inspector tab
+        self.file_inspector = EMDFileInspector()
+        self.tab_widget.addTab(self.file_inspector, "File Inspector")
         
         # Create status bar
         self.status_bar = QStatusBar()
@@ -1727,6 +1733,14 @@ class MibViewerPyQtGraph(QMainWindow):
 
             # Standard loading for smaller files or EMD files
             raw_data = load_data_file(filename)
+            
+            # Load file structure into inspector if it's an EMD file
+            if file_type == "EMD":
+                try:
+                    self.file_inspector.load_file_structure(filename)
+                    self.log_message("Loaded file structure into File Inspector tab")
+                except Exception as e:
+                    self.log_message(f"Could not load file structure: {str(e)}", "WARNING")
 
             # Log the loaded data dimensions
             self.log_message(f"Loaded data shape: {raw_data.shape} (scan_y, scan_x, detector_y, detector_x)")
@@ -6233,6 +6247,10 @@ Bright Field Disk Detection Results:
                 self.bf_preview_window = None
             except:
                 pass
+        
+        # Clear file inspector
+        if hasattr(self, 'file_inspector'):
+            self.file_inspector.clear()
         
         # Force garbage collection multiple times
         for i in range(3):
