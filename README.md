@@ -82,6 +82,28 @@
 
 ## 🛠️ For Developers
 
+## 🤖 AI-friendly development
+
+This repo includes lightweight, auto-generated navigation artifacts to help AI coding assistants
+understand the project structure without reading everything:
+
+- `CLAUDE.md` – project agent instructions (read first)
+- `docs/ai/repo-map.md` – auto-generated module map
+- `docs/ai/symbol-index.json` – auto-generated symbol index
+- `docs/ai/notes/` – high-signal (AI-generated) development notes + `INDEX.md`
+
+Regenerate the map and symbol index after structural changes:
+
+```bash
+uv run python scripts/gen_ai_index.py --include-tests
+```
+
+Update the AI notes index / staleness flags:
+
+```bash
+uv run python scripts/ai_notes_hygiene.py
+```
+
 ### **Repository Structure**
 ```
 src/mib_viewer/          # Main application code

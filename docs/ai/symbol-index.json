@@ -1,0 +1,1262 @@
+[
+  {
+    "kind": "class",
+    "name": "AdaptiveChunkCalculator",
+    "qualname": "AdaptiveChunkCalculator",
+    "path": "src/mib_viewer/io/adaptive_chunking.py",
+    "lineno": 77,
+    "signature": "class AdaptiveChunkCalculator",
+    "doc": "Calculate optimal chunking strategy based on file size, memory, and system resources",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "AdaptiveMibEmdConverter",
+    "qualname": "AdaptiveMibEmdConverter",
+    "path": "src/mib_viewer/io/adaptive_converter.py",
+    "lineno": 40,
+    "signature": "class AdaptiveMibEmdConverter",
+    "doc": "Adaptive converter that automatically optimizes chunking and threading",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "analyze_data_sparsity",
+    "qualname": "analyze_data_sparsity",
+    "path": "src/mib_viewer/analysis/compression_benchmark.py",
+    "lineno": 25,
+    "signature": "analyze_data_sparsity(data_4d)",
+    "doc": "Analyze sparsity and distribution of 4D data",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "apply_binning",
+    "qualname": "apply_binning",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 402,
+    "signature": "apply_binning(data_4d, bin_factor, method)",
+    "doc": "Bin 4D data by given factor in detector dimensions",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "apply_data_processing",
+    "qualname": "apply_data_processing",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 357,
+    "signature": "apply_data_processing(data_4d, processing_options)",
+    "doc": "Apply EELS Y-summing and/or 4D binning to data",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "auto_detect_scan_size",
+    "qualname": "auto_detect_scan_size",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 72,
+    "signature": "auto_detect_scan_size(num_frames)",
+    "doc": "Automatically detect scan size from number of frames",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "benchmark_custom_compression",
+    "qualname": "benchmark_custom_compression",
+    "path": "src/mib_viewer/analysis/compression_benchmark.py",
+    "lineno": 202,
+    "signature": "benchmark_custom_compression(data_4d, output_dir)",
+    "doc": "Test custom compression strategies",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "benchmark_hdf5_compression",
+    "qualname": "benchmark_hdf5_compression",
+    "path": "src/mib_viewer/analysis/compression_benchmark.py",
+    "lineno": 63,
+    "signature": "benchmark_hdf5_compression(data_4d, output_dir)",
+    "doc": "Test HDF5 compression algorithms",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "benchmark_sparse_storage",
+    "qualname": "benchmark_sparse_storage",
+    "path": "src/mib_viewer/analysis/compression_benchmark.py",
+    "lineno": 146,
+    "signature": "benchmark_sparse_storage(data_4d, output_dir)",
+    "doc": "Test sparse matrix storage",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "build_parser",
+    "qualname": "build_parser",
+    "path": "scripts/ai_notes_hygiene.py",
+    "lineno": 127,
+    "signature": "build_parser()",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "build_parser",
+    "qualname": "build_parser",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 133,
+    "signature": "build_parser()",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "build_status",
+    "qualname": "build_status",
+    "path": "scripts/ai_notes_hygiene.py",
+    "lineno": 84,
+    "signature": "build_status(note_path, repo_root)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "class",
+    "name": "CacheMetadata",
+    "qualname": "CacheMetadata",
+    "path": "src/mib_viewer/processing/superres_cache.py",
+    "lineno": 25,
+    "signature": "class CacheMetadata",
+    "doc": "Metadata about cached computation",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "calculate_processed_size",
+    "qualname": "calculate_processed_size",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 441,
+    "signature": "calculate_processed_size(original_shape, processing_options)",
+    "doc": "Calculate the shape and size after processing",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "Chunked4DFFTProcessor",
+    "qualname": "Chunked4DFFTProcessor",
+    "path": "src/mib_viewer/io/chunked_fft_processor.py",
+    "lineno": 81,
+    "signature": "class Chunked4DFFTProcessor",
+    "doc": "Memory-efficient 4D FFT processor using detector dimension chunking",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ChunkInfo",
+    "qualname": "ChunkInfo",
+    "path": "src/mib_viewer/io/adaptive_chunking.py",
+    "lineno": 69,
+    "signature": "class ChunkInfo",
+    "doc": "Lightweight metadata for work queue",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ChunkInfo",
+    "qualname": "ChunkInfo",
+    "path": "src/mib_viewer/io/smart_data_reader.py",
+    "lineno": 33,
+    "signature": "class ChunkInfo",
+    "doc": "Information about a data chunk",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ChunkingResult",
+    "qualname": "ChunkingResult",
+    "path": "src/mib_viewer/io/adaptive_chunking.py",
+    "lineno": 34,
+    "signature": "class ChunkingResult",
+    "doc": "Result of chunk size calculation with all relevant information",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ChunkingStrategy",
+    "qualname": "ChunkingStrategy",
+    "path": "src/mib_viewer/io/adaptive_chunking.py",
+    "lineno": 26,
+    "signature": "class ChunkingStrategy",
+    "doc": "Different chunking approaches based on file characteristics",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ChunkState",
+    "qualname": "ChunkState",
+    "path": "src/mib_viewer/io/progress_reporting.py",
+    "lineno": 35,
+    "signature": "class ChunkState",
+    "doc": "Chunk processing states for detailed tracking",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "classify",
+    "qualname": "classify",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 73,
+    "signature": "classify(rel)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "cleanup_all_cache_files",
+    "qualname": "cleanup_all_cache_files",
+    "path": "src/mib_viewer/processing/superres_cache.py",
+    "lineno": 530,
+    "signature": "cleanup_all_cache_files(emd_path)",
+    "doc": "Delete all cache files for an EMD file",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "cleanup_cache_file",
+    "qualname": "cleanup_cache_file",
+    "path": "src/mib_viewer/processing/superres_cache.py",
+    "lineno": 502,
+    "signature": "cleanup_cache_file(cache_path)",
+    "doc": "Delete a cache file",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ConversionProgress",
+    "qualname": "ConversionProgress",
+    "path": "src/mib_viewer/io/progress_reporting.py",
+    "lineno": 60,
+    "signature": "class ConversionProgress",
+    "doc": "Overall conversion progress tracking",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ConversionWorker",
+    "qualname": "ConversionWorker",
+    "path": "src/mib_viewer/gui/mib_viewer_pyqtgraph.py",
+    "lineno": 53,
+    "signature": "class ConversionWorker",
+    "doc": "Worker class for running MIB to EMD conversion in a separate thread",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ConversionWorkerFactory",
+    "qualname": "ConversionWorkerFactory",
+    "path": "src/mib_viewer/gui/enhanced_conversion_worker.py",
+    "lineno": 250,
+    "signature": "class ConversionWorkerFactory",
+    "doc": "Factory for creating conversion workers with backward compatibility",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "convert_mib_to_emd_adaptive",
+    "qualname": "convert_mib_to_emd_adaptive",
+    "path": "src/mib_viewer/io/adaptive_converter.py",
+    "lineno": 862,
+    "signature": "convert_mib_to_emd_adaptive(input_path, output_path, compression, compression_level, max_workers, processing_options, progress_callback, log_callback, verbose)",
+    "doc": "Convert MIB to EMD with adaptive chunking - convenience function",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "create_adaptive_chunking_strategy",
+    "qualname": "create_adaptive_chunking_strategy",
+    "path": "src/mib_viewer/io/adaptive_chunking.py",
+    "lineno": 492,
+    "signature": "create_adaptive_chunking_strategy(file_shape, file_path, max_workers, conservative, chunk_detector_dims)",
+    "doc": "Convenience function to create chunking strategy with default settings",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "create_chunked_fft_processor",
+    "qualname": "create_chunked_fft_processor",
+    "path": "src/mib_viewer/io/chunked_fft_processor.py",
+    "lineno": 1374,
+    "signature": "create_chunked_fft_processor(conservative, max_workers, progress_callback)",
+    "doc": "Convenience function to create FFT processor with default settings",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "create_mock_mib_file",
+    "qualname": "create_mock_mib_file",
+    "path": "tests/integration/test_gui_integration.py",
+    "lineno": 16,
+    "signature": "create_mock_mib_file(file_path, shape_4d)",
+    "doc": "Create a mock MIB file with header and data",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "create_processing_pipeline",
+    "qualname": "create_processing_pipeline",
+    "path": "src/mib_viewer/io/processing_pipeline.py",
+    "lineno": 469,
+    "signature": "create_processing_pipeline(processing_options, **kwargs)",
+    "doc": "Create a ProcessingPipeline with sensible defaults",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "create_progress_reporter",
+    "qualname": "create_progress_reporter",
+    "path": "src/mib_viewer/io/progress_reporting.py",
+    "lineno": 352,
+    "signature": "create_progress_reporter(chunking_result, progress_callback, log_callback, verbose)",
+    "doc": "Convenience function to create progress reporter with appropriate log level",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "create_smart_reader",
+    "qualname": "create_smart_reader",
+    "path": "src/mib_viewer/io/smart_data_reader.py",
+    "lineno": 428,
+    "signature": "create_smart_reader(file_path, **kwargs)",
+    "doc": "Create a SmartDataReader with sensible defaults",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "create_summary_plot",
+    "qualname": "create_summary_plot",
+    "path": "src/mib_viewer/analysis/compression_benchmark.py",
+    "lineno": 277,
+    "signature": "create_summary_plot(all_results, output_dir)",
+    "doc": "Create summary plots of compression results",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "create_synthetic_emd",
+    "qualname": "create_synthetic_emd",
+    "path": "tests/integration/test_chunked_processing.py",
+    "lineno": 22,
+    "signature": "create_synthetic_emd(filename, shape, dtype)",
+    "doc": "Create a synthetic EMD file for testing",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "create_synthetic_mib_file",
+    "qualname": "create_synthetic_mib_file",
+    "path": "tests/integration/test_adaptive_conversion_integration.py",
+    "lineno": 30,
+    "signature": "create_synthetic_mib_file(output_path, scan_shape, detector_shape, add_noise)",
+    "doc": "Create a synthetic MIB file for testing",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "detect_experiment_type",
+    "qualname": "detect_experiment_type",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 284,
+    "signature": "detect_experiment_type(shape)",
+    "doc": "Detect experiment type (EELS vs 4D STEM) based on data shape",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "EelsEmdSaver",
+    "qualname": "EelsEmdSaver",
+    "path": "src/mib_viewer/io/eels_emd_saver.py",
+    "lineno": 25,
+    "signature": "class EelsEmdSaver",
+    "doc": "Save processed EELS data as EMD 1.0 format",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "EMDFileInspector",
+    "qualname": "EMDFileInspector",
+    "path": "src/mib_viewer/gui/emd_file_inspector.py",
+    "lineno": 19,
+    "signature": "class EMDFileInspector",
+    "doc": "Widget for inspecting EMD file structure and metadata",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "EnhancedConversionWorker",
+    "qualname": "EnhancedConversionWorker",
+    "path": "src/mib_viewer/gui/enhanced_conversion_worker.py",
+    "lineno": 25,
+    "signature": "class EnhancedConversionWorker",
+    "doc": "Enhanced worker class for multithreaded MIB/EMD conversion",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "FFTMode",
+    "qualname": "FFTMode",
+    "path": "src/mib_viewer/io/chunked_fft_processor.py",
+    "lineno": 37,
+    "signature": "class FFTMode",
+    "doc": "FFT computation modes",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "FFTResult",
+    "qualname": "FFTResult",
+    "path": "src/mib_viewer/io/chunked_fft_processor.py",
+    "lineno": 67,
+    "signature": "class FFTResult",
+    "doc": "Result of FFT computation with metadata",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "FileInfo",
+    "qualname": "FileInfo",
+    "path": "src/mib_viewer/io/smart_data_reader.py",
+    "lineno": 44,
+    "signature": "class FileInfo",
+    "doc": "Comprehensive file analysis",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "first_line",
+    "qualname": "first_line",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 49,
+    "signature": "first_line(doc)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "format_signature",
+    "qualname": "format_signature",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 54,
+    "signature": "format_signature(fn)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "get_data_file_info",
+    "qualname": "get_data_file_info",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 477,
+    "signature": "get_data_file_info(path_buffer)",
+    "doc": "Get basic information about a data file without loading the full dataset.",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "get_file_info",
+    "qualname": "get_file_info",
+    "path": "src/mib_viewer/io/smart_data_reader.py",
+    "lineno": 433,
+    "signature": "get_file_info(file_path)",
+    "doc": "Quick file analysis without creating full reader",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "get_mib_properties",
+    "qualname": "get_mib_properties",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 32,
+    "signature": "get_mib_properties(head)",
+    "doc": "Parse header of a MIB data and return object containing frame parameters",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "get_valid_bin_factors",
+    "qualname": "get_valid_bin_factors",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 338,
+    "signature": "get_valid_bin_factors(detector_size)",
+    "doc": "Get binning factors that evenly divide detector dimension",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "iter_py_files",
+    "qualname": "iter_py_files",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 40,
+    "signature": "iter_py_files(root)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "load_data_file",
+    "qualname": "load_data_file",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 252,
+    "signature": "load_data_file(path_buffer)",
+    "doc": "Universal loader that detects file type and loads appropriately.",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "load_emd",
+    "qualname": "load_emd",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 194,
+    "signature": "load_emd(path_buffer)",
+    "doc": "Load EMD 1.0 format file created by our MIB to EMD converter.",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "load_mib",
+    "qualname": "load_mib",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 103,
+    "signature": "load_mib(path_buffer)",
+    "doc": "Load Quantum Detectors MIB file from a path.",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "LogLevel",
+    "qualname": "LogLevel",
+    "path": "src/mib_viewer/io/progress_reporting.py",
+    "lineno": 27,
+    "signature": "class LogLevel",
+    "doc": "Logging verbosity levels",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "scripts/ai_notes_hygiene.py",
+    "lineno": 136,
+    "signature": "main(argv)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 154,
+    "signature": "main(argv)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "src/mib_viewer/__init__.py",
+    "lineno": 9,
+    "signature": "main()",
+    "doc": "Main entry point for the MIB viewer GUI application.",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "src/mib_viewer/__main__.py",
+    "lineno": 10,
+    "signature": "main()",
+    "doc": "Main entry point function with robust import handling.",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "src/mib_viewer/analysis/compression_benchmark.py",
+    "lineno": 325,
+    "signature": "main()",
+    "doc": "Main benchmarking function",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "src/mib_viewer/gui/mib_viewer_pyqtgraph.py",
+    "lineno": 6540,
+    "signature": "main()",
+    "doc": "Main entry point for the PyQtGraph application",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "src/mib_viewer/io/mib_to_emd_converter.py",
+    "lineno": 926,
+    "signature": "main()",
+    "doc": "Command line interface for MIB/EMD to EMD conversion and processing",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "src/mib_viewer/main.py",
+    "lineno": 6,
+    "signature": "main()",
+    "doc": "Main entry point function.",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "src/mib_viewer/main_pyqtgraph.py",
+    "lineno": 6,
+    "signature": "main()",
+    "doc": "Launch the PyQtGraph MIB viewer",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "tests/integration/test_adaptive_conversion_integration.py",
+    "lineno": 361,
+    "signature": "main()",
+    "doc": "Run all integration tests",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "tests/integration/test_chunked_processing.py",
+    "lineno": 184,
+    "signature": "main()",
+    "doc": "Run all chunked processing tests",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "tests/unit/test_chunked_fft.py",
+    "lineno": 100,
+    "signature": "main()",
+    "doc": "Run all tests",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "tests/unit/test_crop_aware_chunking.py",
+    "lineno": 132,
+    "signature": "main()",
+    "doc": "Run all tests",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "tests/unit/test_shape_fix.py",
+    "lineno": 125,
+    "signature": "main()",
+    "doc": "Run the test",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "main",
+    "qualname": "main",
+    "path": "tests/unit/test_smart_data_reader.py",
+    "lineno": 245,
+    "signature": "main()",
+    "doc": "Run all SmartDataReader tests",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "class",
+    "name": "MemoryAnalysis",
+    "qualname": "MemoryAnalysis",
+    "path": "src/mib_viewer/io/chunked_fft_processor.py",
+    "lineno": 51,
+    "signature": "class MemoryAnalysis",
+    "doc": "Memory analysis for adaptive strategy selection",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "MibProperties",
+    "qualname": "MibProperties",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 14,
+    "signature": "class MibProperties",
+    "doc": "Container for MIB file properties and metadata",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "MibToEmdConverter",
+    "qualname": "MibToEmdConverter",
+    "path": "src/mib_viewer/io/mib_to_emd_converter.py",
+    "lineno": 37,
+    "signature": "class MibToEmdConverter",
+    "doc": "Converter for MIB and EMD files to processed EMD 1.0 format with py4DSTEM compatibility",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "MibViewerPyQtGraph",
+    "qualname": "MibViewerPyQtGraph",
+    "path": "src/mib_viewer/gui/mib_viewer_pyqtgraph.py",
+    "lineno": 190,
+    "signature": "class MibViewerPyQtGraph",
+    "doc": "High-performance MIB EELS viewer using PyQtGraph for real-time interactions",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "MockQObject",
+    "qualname": "MockQObject",
+    "path": "tests/integration/test_gui_integration_fixed.py",
+    "lineno": 20,
+    "signature": "class MockQObject",
+    "doc": "",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "class",
+    "name": "MockSignal",
+    "qualname": "MockSignal",
+    "path": "tests/integration/test_gui_integration_fixed.py",
+    "lineno": 16,
+    "signature": "class MockSignal",
+    "doc": "",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "class",
+    "name": "NoteStatus",
+    "qualname": "NoteStatus",
+    "path": "scripts/ai_notes_hygiene.py",
+    "lineno": 27,
+    "signature": "class NoteStatus",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "class",
+    "name": "OptimizationStrategy",
+    "qualname": "OptimizationStrategy",
+    "path": "src/mib_viewer/io/chunked_fft_processor.py",
+    "lineno": 43,
+    "signature": "class OptimizationStrategy",
+    "doc": "Adaptive optimization strategies based on memory constraints",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "parse_frontmatter",
+    "qualname": "parse_frontmatter",
+    "path": "scripts/ai_notes_hygiene.py",
+    "lineno": 51,
+    "signature": "parse_frontmatter(md)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "parse_symbols",
+    "qualname": "parse_symbols",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 87,
+    "signature": "parse_symbols(py_path, repo_root, include_private)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "class",
+    "name": "PipelineStats",
+    "qualname": "PipelineStats",
+    "path": "src/mib_viewer/io/processing_pipeline.py",
+    "lineno": 43,
+    "signature": "class PipelineStats",
+    "doc": "Pipeline performance statistics",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ProcessedChunk",
+    "qualname": "ProcessedChunk",
+    "path": "src/mib_viewer/io/processing_pipeline.py",
+    "lineno": 32,
+    "signature": "class ProcessedChunk",
+    "doc": "Container for processed chunk data",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ProcessingPipeline",
+    "qualname": "ProcessingPipeline",
+    "path": "src/mib_viewer/io/processing_pipeline.py",
+    "lineno": 56,
+    "signature": "class ProcessingPipeline",
+    "doc": "High-performance processing pipeline with overlapping I/O and compute",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "progress_callback",
+    "qualname": "progress_callback",
+    "path": "tests/integration/test_progressive_eels.py",
+    "lineno": 18,
+    "signature": "progress_callback(status)",
+    "doc": "Progress callback function",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "class",
+    "name": "ProgressiveEELSLoader",
+    "qualname": "ProgressiveEELSLoader",
+    "path": "src/mib_viewer/io/progressive_eels_loader.py",
+    "lineno": 36,
+    "signature": "class ProgressiveEELSLoader",
+    "doc": "Progressive loader for large EELS datasets",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ProgressiveLoadingResult",
+    "qualname": "ProgressiveLoadingResult",
+    "path": "src/mib_viewer/io/progressive_eels_loader.py",
+    "lineno": 28,
+    "signature": "class ProgressiveLoadingResult",
+    "doc": "Result of progressive loading initialization",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "ProgressReporter",
+    "qualname": "ProgressReporter",
+    "path": "src/mib_viewer/io/progress_reporting.py",
+    "lineno": 97,
+    "signature": "class ProgressReporter",
+    "doc": "Thread-safe progress reporting system for adaptive chunking",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "project_root",
+    "qualname": "project_root",
+    "path": "scripts/ai_notes_hygiene.py",
+    "lineno": 38,
+    "signature": "project_root()",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "project_root",
+    "qualname": "project_root",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 32,
+    "signature": "project_root()",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "read_text",
+    "qualname": "read_text",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 45,
+    "signature": "read_text(path)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "run_git",
+    "qualname": "run_git",
+    "path": "scripts/ai_notes_hygiene.py",
+    "lineno": 46,
+    "signature": "run_git(args, cwd)",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "should_use_progressive_loading",
+    "qualname": "should_use_progressive_loading",
+    "path": "src/mib_viewer/io/progressive_eels_loader.py",
+    "lineno": 324,
+    "signature": "should_use_progressive_loading(file_path, memory_threshold_gb)",
+    "doc": "Determine if progressive loading should be used for a file",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "SmartDataReader",
+    "qualname": "SmartDataReader",
+    "path": "src/mib_viewer/io/smart_data_reader.py",
+    "lineno": 56,
+    "signature": "class SmartDataReader",
+    "doc": "Universal large file reader with multithreaded I/O and intelligent chunking",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "SuperResCacheManager",
+    "qualname": "SuperResCacheManager",
+    "path": "src/mib_viewer/processing/superres_cache.py",
+    "lineno": 39,
+    "signature": "class SuperResCacheManager",
+    "doc": "Manages HDF5 cache files for super-resolution intermediate data",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "SuperResProcessor",
+    "qualname": "SuperResProcessor",
+    "path": "src/mib_viewer/processing/superres_processor.py",
+    "lineno": 19,
+    "signature": "class SuperResProcessor",
+    "doc": "Processor for super-resolution bright field reconstruction from 4D STEM data.",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "Symbol",
+    "qualname": "Symbol",
+    "path": "scripts/gen_ai_index.py",
+    "lineno": 21,
+    "signature": "class Symbol",
+    "doc": "",
+    "category": "scripts"
+  },
+  {
+    "kind": "function",
+    "name": "test_adaptive_chunking_strategy",
+    "qualname": "test_adaptive_chunking_strategy",
+    "path": "tests/integration/test_adaptive_conversion_integration.py",
+    "lineno": 121,
+    "signature": "test_adaptive_chunking_strategy()",
+    "doc": "Test that chunking strategy calculation works correctly",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_basic_chunking",
+    "qualname": "test_basic_chunking",
+    "path": "tests/unit/test_chunking_simple.py",
+    "lineno": 14,
+    "signature": "test_basic_chunking()",
+    "doc": "Test basic chunking functionality",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_chunked_conversion",
+    "qualname": "test_chunked_conversion",
+    "path": "tests/integration/test_chunked_processing.py",
+    "lineno": 132,
+    "signature": "test_chunked_conversion(input_file, output_file, processing_options)",
+    "doc": "Test complete chunked conversion pipeline",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_chunked_fft_initialization",
+    "qualname": "test_chunked_fft_initialization",
+    "path": "tests/unit/test_crop_aware_chunking.py",
+    "lineno": 109,
+    "signature": "test_chunked_fft_initialization()",
+    "doc": "Test that chunked FFT processor can initialize with crop-aware chunking",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_chunked_reader",
+    "qualname": "test_chunked_reader",
+    "path": "tests/integration/test_chunked_processing.py",
+    "lineno": 98,
+    "signature": "test_chunked_reader(filename, chunk_size)",
+    "doc": "Test the chunked EMD reader generator",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_chunking_strategies",
+    "qualname": "test_chunking_strategies",
+    "path": "tests/unit/test_smart_data_reader.py",
+    "lineno": 44,
+    "signature": "test_chunking_strategies(file_path)",
+    "doc": "Test different chunking strategies",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_concurrent_access",
+    "qualname": "test_concurrent_access",
+    "path": "tests/unit/test_smart_data_reader.py",
+    "lineno": 196,
+    "signature": "test_concurrent_access(file_path)",
+    "doc": "Test concurrent access to different chunks",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_converter",
+    "qualname": "test_converter",
+    "path": "src/mib_viewer/io/test_emd_converter.py",
+    "lineno": 21,
+    "signature": "test_converter()",
+    "doc": "Test the MIB to EMD converter on sample data",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "test_crop_aware_chunking",
+    "qualname": "test_crop_aware_chunking",
+    "path": "tests/unit/test_crop_aware_chunking.py",
+    "lineno": 12,
+    "signature": "test_crop_aware_chunking()",
+    "doc": "Test crop-aware detector dimension chunking",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_data_integrity",
+    "qualname": "test_data_integrity",
+    "path": "tests/integration/test_data_integrity_comparison.py",
+    "lineno": 21,
+    "signature": "test_data_integrity()",
+    "doc": "Test data integrity by comparing 1000 random positions between:",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_detector_chunking",
+    "qualname": "test_detector_chunking",
+    "path": "tests/unit/test_chunked_fft.py",
+    "lineno": 56,
+    "signature": "test_detector_chunking()",
+    "doc": "Test detector dimension chunking",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_dimension_detection",
+    "qualname": "test_dimension_detection",
+    "path": "tests/unit/test_fixed_adaptive_converter.py",
+    "lineno": 18,
+    "signature": "test_dimension_detection()",
+    "doc": "Test that dimension detection works correctly",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_emd_compatibility",
+    "qualname": "test_emd_compatibility",
+    "path": "src/mib_viewer/io/test_emd_converter.py",
+    "lineno": 89,
+    "signature": "test_emd_compatibility(emd_path)",
+    "doc": "Test EMD file compatibility with standard tools",
+    "category": "src"
+  },
+  {
+    "kind": "function",
+    "name": "test_error_handling",
+    "qualname": "test_error_handling",
+    "path": "tests/integration/test_adaptive_conversion_integration.py",
+    "lineno": 342,
+    "signature": "test_error_handling()",
+    "doc": "Test error handling for invalid inputs",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_factory_options",
+    "qualname": "test_factory_options",
+    "path": "tests/integration/test_gui_integration_fixed.py",
+    "lineno": 116,
+    "signature": "test_factory_options()",
+    "doc": "Test that the factory correctly switches between converters",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_fft_shape_chunking",
+    "qualname": "test_fft_shape_chunking",
+    "path": "tests/unit/test_shape_fix.py",
+    "lineno": 12,
+    "signature": "test_fft_shape_chunking()",
+    "doc": "Test that chunking strategy now uses FFT shape instead of original shape",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_file_analysis",
+    "qualname": "test_file_analysis",
+    "path": "tests/unit/test_smart_data_reader.py",
+    "lineno": 21,
+    "signature": "test_file_analysis(file_path)",
+    "doc": "Test basic file analysis",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_gui_integration",
+    "qualname": "test_gui_integration",
+    "path": "tests/integration/test_gui_integration.py",
+    "lineno": 42,
+    "signature": "test_gui_integration()",
+    "doc": "Test GUI integration with converter v2",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_gui_integration",
+    "qualname": "test_gui_integration",
+    "path": "tests/integration/test_gui_integration_fixed.py",
+    "lineno": 37,
+    "signature": "test_gui_integration()",
+    "doc": "Test that GUI integration uses the fixed adaptive converter",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_imports",
+    "qualname": "test_imports",
+    "path": "tests/unit/test_chunked_fft.py",
+    "lineno": 12,
+    "signature": "test_imports()",
+    "doc": "Test that all imports work correctly",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_initialization",
+    "qualname": "test_initialization",
+    "path": "tests/unit/test_chunked_fft.py",
+    "lineno": 35,
+    "signature": "test_initialization()",
+    "doc": "Test processor initialization",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_memory_detection",
+    "qualname": "test_memory_detection",
+    "path": "tests/integration/test_chunked_processing.py",
+    "lineno": 71,
+    "signature": "test_memory_detection()",
+    "doc": "Test the memory detection logic",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_memory_management",
+    "qualname": "test_memory_management",
+    "path": "tests/unit/test_smart_data_reader.py",
+    "lineno": 147,
+    "signature": "test_memory_management(file_path)",
+    "doc": "Test memory management and caching",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_multithreaded_performance",
+    "qualname": "test_multithreaded_performance",
+    "path": "tests/unit/test_smart_data_reader.py",
+    "lineno": 88,
+    "signature": "test_multithreaded_performance(file_path)",
+    "doc": "Test multithreaded performance vs single-threaded",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_progressive_loading",
+    "qualname": "test_progressive_loading",
+    "path": "tests/integration/test_progressive_eels.py",
+    "lineno": 25,
+    "signature": "test_progressive_loading()",
+    "doc": "Test progressive loading with the test file",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "test_small_conversion",
+    "qualname": "test_small_conversion",
+    "path": "tests/unit/test_fixed_adaptive_converter.py",
+    "lineno": 77,
+    "signature": "test_small_conversion()",
+    "doc": "Test a small conversion to verify no segfaults",
+    "category": "tests:unit"
+  },
+  {
+    "kind": "function",
+    "name": "test_synthetic_mib_conversion",
+    "qualname": "test_synthetic_mib_conversion",
+    "path": "tests/integration/test_adaptive_conversion_integration.py",
+    "lineno": 153,
+    "signature": "test_synthetic_mib_conversion()",
+    "doc": "Test conversion of synthetic MIB file with adaptive chunking",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "class",
+    "name": "TestProgressTracker",
+    "qualname": "TestProgressTracker",
+    "path": "tests/integration/test_adaptive_conversion_integration.py",
+    "lineno": 102,
+    "signature": "class TestProgressTracker",
+    "doc": "Test progress callback that captures progress updates",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "validate_chunk_positioning",
+    "qualname": "validate_chunk_positioning",
+    "path": "tests/integration/test_adaptive_conversion_integration.py",
+    "lineno": 252,
+    "signature": "validate_chunk_positioning(mib_info, emd_path, num_checks)",
+    "doc": "Validate chunk positioning using deterministic data patterns",
+    "category": "tests:integration"
+  },
+  {
+    "kind": "function",
+    "name": "walk_emd_structure",
+    "qualname": "walk_emd_structure",
+    "path": "src/mib_viewer/io/mib_loader.py",
+    "lineno": 551,
+    "signature": "walk_emd_structure(filename)",
+    "doc": "Walk through complete EMD file structure and extract all metadata.",
+    "category": "src"
+  },
+  {
+    "kind": "class",
+    "name": "WorkerStats",
+    "qualname": "WorkerStats",
+    "path": "src/mib_viewer/io/progress_reporting.py",
+    "lineno": 46,
+    "signature": "class WorkerStats",
+    "doc": "Statistics for individual worker performance",
+    "category": "src"
+  }
+]
