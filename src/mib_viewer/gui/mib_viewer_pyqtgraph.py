@@ -106,7 +106,7 @@ class ConversionWorker(QObject):
                     self.progress_updated.emit(i, "Loading MIB data...")
                     time.sleep(0.5)  # Small delay to show progress
             
-            # Phase 3: Convert to EMD (60% of progress)
+            # Phase 3: Convert to the selected output format (60% of progress)
             self.progress_updated.emit(40, "Converting to EMD format...")
             if self.cancelled:
                 return
@@ -208,6 +208,7 @@ class MibViewerPyQtGraph(QMainWindow):
         self.eels_filename = ""
         self.ndata_filename = ""
         self.stem4d_filename = ""
+        self.current_input_file_path = ""
         
         # Current selections
         self.current_roi = None  # Will store ROI bounds
@@ -324,9 +325,9 @@ class MibViewerPyQtGraph(QMainWindow):
         self.superres_tab = self.create_superres_tab()
         self.tab_widget.addTab(self.superres_tab, "Super-Res BF")
 
-        # Create MIB to EMD conversion tab
+        # Create generic conversion tab
         self.conversion_tab = self.create_conversion_tab()
-        self.tab_widget.addTab(self.conversion_tab, "MIB → EMD")
+        self.tab_widget.addTab(self.conversion_tab, "Converter")
         
         # Create File Inspector tab
         self.file_inspector = EMDFileInspector()
@@ -1163,7 +1164,7 @@ class MibViewerPyQtGraph(QMainWindow):
         return explorer_widget
 
     def create_conversion_tab(self):
-        """Create the MIB to EMD conversion tab"""
+        """Create the generic file conversion tab."""
         # Create main widget and layout
         tab_widget = QWidget()
         main_layout = QVBoxLayout(tab_widget)
@@ -1179,7 +1180,7 @@ class MibViewerPyQtGraph(QMainWindow):
         self.input_browse_btn = QPushButton("Browse...")
         self.input_browse_btn.clicked.connect(self.browse_input_file)
         
-        input_layout.addWidget(QLabel("MIB File:"), 0, 0)
+        input_layout.addWidget(QLabel("Source File:"), 0, 0)
         input_layout.addWidget(self.input_file_path, 0, 1)
         input_layout.addWidget(self.input_browse_btn, 0, 2)
         
@@ -1191,6 +1192,13 @@ class MibViewerPyQtGraph(QMainWindow):
         # Output settings section
         output_group = QGroupBox("Output Settings")
         output_layout = QGridLayout(output_group)
+
+        # Output format selection
+        self.output_format_combo = QComboBox()
+        self.output_format_combo.addItems(["EMD 1.0", "NumPy + JSON"])
+        self.output_format_combo.currentTextChanged.connect(self.update_conversion_mode)
+        output_layout.addWidget(QLabel("Output Format:"), 0, 0)
+        output_layout.addWidget(self.output_format_combo, 0, 1, 1, 2)
         
         # Output folder
         self.output_folder_path = QLineEdit()
@@ -1198,34 +1206,33 @@ class MibViewerPyQtGraph(QMainWindow):
         self.output_folder_browse_btn = QPushButton("Browse...")
         self.output_folder_browse_btn.clicked.connect(self.browse_output_folder)
         
-        output_layout.addWidget(QLabel("Output Folder:"), 0, 0)
-        output_layout.addWidget(self.output_folder_path, 0, 1)
-        output_layout.addWidget(self.output_folder_browse_btn, 0, 2)
+        output_layout.addWidget(QLabel("Output Folder:"), 1, 0)
+        output_layout.addWidget(self.output_folder_path, 1, 1)
+        output_layout.addWidget(self.output_folder_browse_btn, 1, 2)
         
         # Output filename
         self.output_filename = QLineEdit()
         self.output_filename.setPlaceholderText("Will be auto-generated")
-        output_layout.addWidget(QLabel("Output File:"), 1, 0)
-        output_layout.addWidget(self.output_filename, 1, 1, 1, 2)
+        output_layout.addWidget(QLabel("Output File:"), 2, 0)
+        output_layout.addWidget(self.output_filename, 2, 1, 1, 2)
         
         # Compression settings
         compression_layout = QHBoxLayout()
         self.compression_combo = QComboBox()
-        self.compression_combo.addItems(['gzip', 'szip', 'lzf', 'none'])
-        self.compression_combo.setCurrentText('gzip')
+        self.compression_combo.addItem("High compression (zstd)", "zstd")
+        self.compression_combo.addItem("Fast compression (lz4)", "lz4")
+        self.compression_combo.setCurrentIndex(0)
         self.compression_combo.currentTextChanged.connect(self.update_compression_level)
         
-        self.compression_level_combo = QComboBox()
-        self.compression_level_combo.addItems(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
-        self.compression_level_combo.setCurrentText('6')
+        self.compression_description_label = QLabel("")
+        self.compression_description_label.setStyleSheet("color: #555; font-style: italic;")
         
         compression_layout.addWidget(QLabel("Compression:"))
         compression_layout.addWidget(self.compression_combo)
-        compression_layout.addWidget(QLabel("Level:"))
-        compression_layout.addWidget(self.compression_level_combo)
+        compression_layout.addWidget(self.compression_description_label)
         compression_layout.addStretch()
         
-        output_layout.addLayout(compression_layout, 2, 0, 1, 3)
+        output_layout.addLayout(compression_layout, 3, 0, 1, 3)
         
         # Data Processing section
         processing_group = QGroupBox("Data Processing")
@@ -1316,7 +1323,7 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Buttons
         button_layout = QHBoxLayout()
-        self.convert_btn = QPushButton("Convert to EMD")
+        self.convert_btn = QPushButton("Run Conversion")
         self.convert_btn.setEnabled(False)
         self.convert_btn.clicked.connect(self.start_conversion)
         
@@ -1347,6 +1354,9 @@ class MibViewerPyQtGraph(QMainWindow):
         self.converter = None
         self.conversion_thread = None
         self.last_converted_file = None
+
+        # Apply initial UI state based on default output format
+        self.update_conversion_mode()
         
         return tab_widget
     
@@ -1662,6 +1672,13 @@ class MibViewerPyQtGraph(QMainWindow):
         
         file_menu.addSeparator()
 
+        self.export_mib_action = QAction('Export MIB to NumPy/JSON...', self)
+        self.export_mib_action.triggered.connect(self.export_mib_to_numpy_json)
+        self.export_mib_action.setEnabled(False)
+        file_menu.addAction(self.export_mib_action)
+
+        file_menu.addSeparator()
+
         # Save EELS as EMD option - enabled when EELS data is available
         self.save_eels_action = QAction('Save EELS as EMD...', self)
         self.save_eels_action.triggered.connect(self.save_eels_as_emd)
@@ -1707,6 +1724,7 @@ class MibViewerPyQtGraph(QMainWindow):
         try:
             # Determine file type and show appropriate loading message
             file_ext = os.path.splitext(filename)[1].lower()
+            self.current_input_file_path = filename
             if file_ext == '.emd':
                 self.status_bar.showMessage("Loading EMD file...")
                 file_type = "EMD"
@@ -1887,6 +1905,7 @@ class MibViewerPyQtGraph(QMainWindow):
 
             # Initialize loader
             self.progressive_loader = ProgressiveEELSLoader(filename, progress_callback=progress_callback)
+            self.current_input_file_path = filename
             self._latest_progress_status = None
 
             # Set progressive loading state tracking
@@ -1970,7 +1989,7 @@ class MibViewerPyQtGraph(QMainWindow):
                 self.is_progressive_loading_active = False
                 self.has_unsaved_progressive_data = True
 
-                self.status_bar.showMessage(f"Progressive loading complete! Click 'Convert to EMD' to save processed data.")
+                self.status_bar.showMessage(f"Progressive loading complete! Use the Converter tab to export processed data.")
                 self.log_message("Progressive loading completed - all regions ready", "SUCCESS")
 
         except Exception as e:
@@ -3171,16 +3190,17 @@ class MibViewerPyQtGraph(QMainWindow):
     
     # Conversion tab methods
     def browse_input_file(self):
-        """Browse for input MIB file"""
+        """Browse for an input source file."""
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Select MIB file to convert",
+            "Select MIB source file",
             "",
             "MIB files (*.mib);;All files (*.*)"
         )
         
         if filename:
             self.input_file_path.setText(filename)
+            self.current_input_file_path = filename
             self.analyze_input_file(filename)
     
     def browse_output_folder(self):
@@ -3193,7 +3213,69 @@ class MibViewerPyQtGraph(QMainWindow):
         if folder:
             self.output_folder_path.setText(folder)
             self.update_output_filename()
-    
+
+    def get_output_format(self) -> str:
+        """Return the selected output format key."""
+        if hasattr(self, 'output_format_combo') and self.output_format_combo.currentText() == "NumPy + JSON":
+            return "numpy_json"
+        return "emd"
+
+    def get_selected_compression_preset(self) -> str:
+        """Return the selected EMD compression preset key."""
+        if hasattr(self, 'compression_combo'):
+            preset = self.compression_combo.currentData()
+            if preset:
+                return str(preset)
+        return "zstd"
+
+    def update_conversion_mode(self):
+        """Update UI elements based on the selected output format."""
+        is_numpy_export = self.get_output_format() == "numpy_json"
+
+        if hasattr(self, 'convert_btn'):
+            self.convert_btn.setText("Export NumPy/JSON" if is_numpy_export else "Convert to EMD")
+
+        if hasattr(self, 'compression_combo'):
+            self.compression_combo.setEnabled(not is_numpy_export)
+        if hasattr(self, 'compression_description_label'):
+            self.compression_description_label.setText(
+                "" if is_numpy_export else self._compression_description_text()
+            )
+
+        if hasattr(self, 'processing_options_widget'):
+            self.processing_options_widget.setEnabled(True)
+            self.processing_options_widget.setVisible(True if is_numpy_export else not is_numpy_export)
+        if hasattr(self, 'experiment_type_label') and is_numpy_export:
+            self.experiment_type_label.setText(
+                "NumPy/JSON export is available for the loaded MIB source.\n"
+                "EELS export defaults to Y-summing.\n"
+                "Binning is available but off by default."
+            )
+
+        if hasattr(self, 'preview_label'):
+            if is_numpy_export:
+                self.preview_label.setText(
+                    "NumPy/JSON export writes the source MIB to an .npy array and a metadata .json file.\n"
+                    "EELS detector orientation is preserved with the viewer's energy-axis reversal.\n"
+                    "Binning is available for EELS and 4D STEM, but it is off by default."
+                )
+                self.preview_label.setStyleSheet("color: #000; padding: 10px;")
+            else:
+                self.update_conversion_preview()
+        if hasattr(self, 'open_converted_btn'):
+            self.open_converted_btn.setEnabled(False)
+
+        self.update_output_filename()
+
+    def _compression_description_text(self) -> str:
+        """Return the explanatory text for the selected compression preset."""
+        preset = self.get_selected_compression_preset()
+        if preset == "zstd":
+            return "Best compression ratio"
+        if preset == "lz4":
+            return "Fastest read/write, about 60% of zstd's compression"
+        return ""
+
     def analyze_input_file(self, filename):
         """Analyze the selected input file and update UI"""
         try:
@@ -3239,47 +3321,66 @@ class MibViewerPyQtGraph(QMainWindow):
         input_path = self.input_file_path.text()
         if input_path:
             base_name = os.path.splitext(os.path.basename(input_path))[0]
-            output_name = f"{base_name}.emd"
+            output_name = f"{base_name}.npy" if self.get_output_format() == "numpy_json" else f"{base_name}.emd"
             self.output_filename.setText(output_name)
     
     def update_compression_level(self):
-        """Update compression level availability based on algorithm"""
-        algorithm = self.compression_combo.currentText()
-        
-        if algorithm == 'gzip':
-            self.compression_level_combo.setEnabled(True)
-        else:
-            self.compression_level_combo.setEnabled(False)
-        
+        """Update compression helper text based on selected preset."""
+        if hasattr(self, 'compression_description_label'):
+            self.compression_description_label.setText(self._compression_description_text())
         self.update_conversion_preview()
-    
+
     def update_conversion_preview(self):
         """Update the conversion preview information"""
         input_path = self.input_file_path.text()
         if not input_path:
             return
-        
+
+        if self.get_output_format() == "numpy_json":
+            try:
+                file_info = get_data_file_info(input_path)
+                if not file_info['compatible']:
+                    return
+
+                input_size_gb = file_info['size_gb']
+                shape = file_info['shape']
+                processing_options = self.get_processing_options()
+                if processing_options.get('sum_y', False) and processing_options.get('bin_factor', 1) > 1:
+                    processing_text = (
+                        f"{processing_options['bin_factor']}x{processing_options['bin_factor']} binning "
+                        "→ Y-summed EELS export"
+                    )
+                elif processing_options.get('sum_y', False):
+                    processing_text = "Y-summed EELS export"
+                elif processing_options.get('bin_factor', 1) > 1:
+                    method = processing_options.get('bin_method', 'mean').capitalize()
+                    processing_text = (
+                        f"{processing_options['bin_factor']}x{processing_options['bin_factor']} "
+                        f"binning ({method})"
+                    )
+                else:
+                    processing_text = "raw MIB export"
+                preview_lines = [
+                    f"Input size: {input_size_gb:.2f} GB ({shape})",
+                    "Output: NumPy .npy array + JSON metadata",
+                    f"Processing: {processing_text} (viewer-style energy-axis reversal applied)",
+                ]
+                self.preview_label.setText("\n".join(preview_lines))
+                self.preview_label.setStyleSheet("color: #000; padding: 10px;")
+            except Exception as e:
+                self.preview_label.setText(f"Preview unavailable: {str(e)}")
+                self.preview_label.setStyleSheet("color: #cc0000; padding: 10px;")
+            return
+
         try:
             file_info = get_data_file_info(input_path)
             if not file_info['compatible']:
                 return
             
             input_size_gb = file_info['size_gb']
-            compression_algo = self.compression_combo.currentText()
-            
-            # Estimate compression ratios based on our benchmark data
-            compression_ratios = {
-                'gzip': {'1': 20.1, '6': 26.4, '9': 28.9},
-                'szip': {'default': 23.5},
-                'lzf': {'default': 14.0},
-                'none': {'default': 0.8}
-            }
-            
-            if compression_algo == 'gzip':
-                level = self.compression_level_combo.currentText()
-                ratio = compression_ratios['gzip'].get(level, 26.4)
-            else:
-                ratio = compression_ratios.get(compression_algo, {}).get('default', 1.0)
+            compression_preset = self.get_selected_compression_preset()
+            ratio_multiplier = 1.0 if compression_preset == "zstd" else 0.60
+            preset_label = "High compression (zstd)" if compression_preset == "zstd" else "Fast compression (lz4)"
             
             # Calculate data processing impact
             processing_options = self.get_processing_options()
@@ -3288,8 +3389,10 @@ class MibViewerPyQtGraph(QMainWindow):
             
             # Calculate total size after processing and compression
             processed_size_gb = input_size_gb / processing_reduction
-            final_size_gb = processed_size_gb / ratio if ratio > 1 else processed_size_gb * 1.25
-            
+            base_zstd_ratio = 13.5
+            estimated_ratio = base_zstd_ratio * ratio_multiplier
+            final_size_gb = processed_size_gb / estimated_ratio if estimated_ratio > 1 else processed_size_gb
+
             # Calculate total reduction factor
             total_reduction = input_size_gb / final_size_gb
             
@@ -3307,6 +3410,7 @@ class MibViewerPyQtGraph(QMainWindow):
                 preview_lines.append(f"After processing: {processed_size_gb:.2f} GB ({processed_shape}) • {processing_reduction:.1f}x reduction")
             
             preview_lines.extend([
+                f"Compression preset: {preset_label}",
                 f"Final output size: {final_size_gb:.2f} GB ({total_reduction:.1f}x total reduction)",
                 f"Estimated time: ~{estimated_time} seconds"
             ])
@@ -3329,10 +3433,14 @@ class MibViewerPyQtGraph(QMainWindow):
             self.preview_label.setStyleSheet("color: #cc0000; padding: 10px;")
     
     def start_conversion(self):
-        """Start the MIB to EMD conversion process using threaded worker"""
+        """Start the selected conversion or export process."""
         input_path = self.input_file_path.text()
         if not input_path or not os.path.exists(input_path):
             QMessageBox.warning(self, "Error", "Please select a valid input file.")
+            return
+
+        if self.get_output_format() == "numpy_json":
+            self._run_numpy_export_conversion(input_path)
             return
         
         # Determine output path
@@ -3359,13 +3467,8 @@ class MibViewerPyQtGraph(QMainWindow):
                 return
         
         # Setup conversion parameters
-        compression = self.compression_combo.currentText()
-        if compression == 'none':
-            compression = None
-        
+        compression = self.get_selected_compression_preset()
         compression_level = None
-        if compression == 'gzip':
-            compression_level = int(self.compression_level_combo.currentText())
         
         # Setup UI for conversion
         self.convert_btn.setEnabled(False)
@@ -3383,7 +3486,7 @@ class MibViewerPyQtGraph(QMainWindow):
             input_path, output_path, compression, compression_level,
             processing_options=processing_options,
             log_callback=self.log_message,
-            use_enhanced=True   # Back to adaptive converter for debugging
+            use_enhanced=False  # Use the stable direct converter for preset-based compression
         )
         self.conversion_thread = QThread()
         
@@ -3405,6 +3508,103 @@ class MibViewerPyQtGraph(QMainWindow):
         
         # Start the thread
         self.conversion_thread.start()
+
+    def _run_numpy_export_conversion(self, input_path):
+        """Export the current MIB source to NumPy/JSON from the converter tab."""
+        source_path = self._get_current_mib_source_path()
+        if not source_path or not source_path.lower().endswith('.mib'):
+            QMessageBox.warning(
+                self,
+                "MIB Required",
+                "NumPy/JSON export only supports source MIB files."
+            )
+            return
+
+        output_folder = self.output_folder_path.text()
+        if not output_folder:
+            output_folder = os.path.dirname(source_path)
+
+        output_filename = self.output_filename.text().strip()
+        if not output_filename:
+            output_filename = f"{os.path.splitext(os.path.basename(source_path))[0]}.npy"
+
+        output_path = os.path.join(output_folder, output_filename)
+        output_base = os.path.splitext(output_path)[0]
+        output_npy = f"{output_base}.npy"
+        output_json = f"{output_base}.json"
+
+        if os.path.exists(output_npy) or os.path.exists(output_json):
+            reply = QMessageBox.question(
+                self,
+                "File Exists",
+                f"One or more export files already exist for {os.path.basename(output_base)}.\n\nOverwrite them?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self._numpy_export_cancelled = False
+        self.convert_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.conversion_progress.setVisible(True)
+        self.conversion_progress.setRange(0, 100)
+        self.conversion_progress.setValue(0)
+        self.conversion_status.setText("Initializing NumPy/JSON export...")
+
+        try:
+            from ..io.mib_numpy_exporter import export_mib_to_numpy_json
+
+            self.log_message(
+                f"Starting NumPy/JSON export: {os.path.basename(source_path)} → {os.path.basename(output_npy)}"
+            )
+
+            def progress_callback(percent, message):
+                if getattr(self, '_numpy_export_cancelled', False):
+                    raise InterruptedError("Export operation cancelled by user")
+                self.conversion_progress.setValue(percent)
+                self.conversion_status.setText(message)
+                QApplication.processEvents()
+
+            metadata = export_mib_to_numpy_json(
+                source_path,
+                output_base=output_base,
+                force=True,
+                progress_every=256,
+                progress_callback=progress_callback,
+                processing_options=self.get_processing_options(),
+            )
+
+            self.conversion_progress.setValue(100)
+            self.conversion_status.setText("NumPy/JSON export completed successfully!")
+            self.last_converted_file = metadata["output_npy"]
+            self.log_message(
+                f"NumPy/JSON export completed: {metadata['output_npy']} and {metadata['output_json']}",
+                "SUCCESS"
+            )
+
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"MIB exported successfully.\n\n"
+                f"NumPy: {metadata['output_npy']}\n"
+                f"JSON: {metadata['output_json']}\n"
+                f"Shape: {metadata['array_shape']}"
+            )
+
+        except InterruptedError:
+            QMessageBox.information(self, "Export Cancelled", "Export operation was cancelled.")
+            self.log_message("User cancelled NumPy/JSON export", "WARNING")
+            self.conversion_status.setText("Export cancelled")
+            self.conversion_progress.setValue(0)
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Error exporting MIB to NumPy/JSON:\n{str(e)}")
+            self.log_message(f"Error exporting MIB to NumPy/JSON: {str(e)}", "ERROR")
+            self.conversion_status.setText(f"Export failed: {str(e)}")
+            self.conversion_progress.setValue(0)
+        finally:
+            self._numpy_export_cancelled = False
+            self.cancel_btn.setEnabled(False)
+            self.convert_btn.setEnabled(True)
     
     def on_conversion_progress(self, progress, status):
         """Handle progress updates from conversion worker"""
@@ -3486,6 +3686,15 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def cancel_conversion(self):
         """Cancel the ongoing conversion"""
+        numpy_mode = self.get_output_format() == "numpy_json"
+        thread = getattr(self, 'conversion_thread', None)
+        if numpy_mode and (thread is None or not thread.isRunning()):
+            self._numpy_export_cancelled = True
+            self.cancel_btn.setEnabled(False)
+            self.conversion_status.setText("Cancelling export...")
+            self.log_message("User requested cancellation of NumPy/JSON export", "WARNING")
+            return
+
         if hasattr(self, 'conversion_worker') and self.conversion_worker:
             # Signal the worker to cancel
             self.conversion_worker.cancel()
@@ -3518,6 +3727,7 @@ class MibViewerPyQtGraph(QMainWindow):
             try:
                 # Load the converted file using the existing loader
                 raw_data = load_data_file(self.last_converted_file)
+                self.current_input_file_path = self.last_converted_file
                 
                 # Detect experiment type based on data shape
                 experiment_type, exp_info = detect_experiment_type(raw_data.shape)
@@ -3608,6 +3818,19 @@ class MibViewerPyQtGraph(QMainWindow):
         detector_type = processing_info.get('detector_type', 'Unknown detector')
         self.experiment_type_label.setText(f"Auto-detected: {exp_type} ({detector_type})")
         self.experiment_type_label.setStyleSheet("color: #000; font-weight: bold;")
+
+        if self.get_output_format() == "numpy_json":
+            self.processing_options_widget.setVisible(True)
+            can_sum_y = processing_info.get('can_sum_y', False)
+            self.sum_y_radio.setEnabled(can_sum_y)
+            self.binning_radio.setEnabled(True)
+            self.advanced_radio.setEnabled(can_sum_y)
+            if processing_info.get('can_sum_y', False):
+                self.sum_y_radio.setChecked(True)
+            else:
+                self.no_processing_radio.setChecked(True)
+            self.update_processing_ui()
+            return
         
         # Show processing options
         self.processing_options_widget.setVisible(True)
@@ -3660,6 +3883,9 @@ class MibViewerPyQtGraph(QMainWindow):
     
     def update_processing_ui(self):
         """Update UI elements based on selected processing option"""
+        if hasattr(self, 'processing_options_widget'):
+            self.processing_options_widget.setVisible(True)
+
         # Enable/disable combo boxes based on selected radio button
         binning_selected = self.binning_radio.isChecked() or self.advanced_radio.isChecked()
         self.bin_factor_combo.setEnabled(binning_selected)
@@ -3854,7 +4080,7 @@ class MibViewerPyQtGraph(QMainWindow):
             QMessageBox.warning(self, "Conversion Required",
                               "FFT computation requires EMD format for efficient processing.\n\n"
                               "To convert your .mib file:\n"
-                              "1. Go to the 'MIB to EMD Conversion' tab\n"
+                              "1. Go to the 'Converter' tab\n"
                               "2. Convert your file to EMD format\n"
                               "3. Load the converted .emd file in the '4D STEM' tab\n"
                               "4. Return here to compute FFT")
@@ -3869,7 +4095,7 @@ class MibViewerPyQtGraph(QMainWindow):
             QMessageBox.critical(self, "Invalid EMD File",
                                f"The file is not a valid HDF5/EMD file:\n{os.path.basename(self.stem4d_filename)}\n\n"
                                f"Error: {str(e)}\n\n"
-                               f"Please use the 'MIB to EMD Conversion' tab to convert your file.")
+                               f"Please use the 'Converter' tab to convert your file.")
             return
 
         # Check if estimation was done and crop info is needed for cropped mode
@@ -6348,7 +6574,7 @@ Bright Field Disk Detection Results:
                     raise InterruptedError("Save operation cancelled by user")
 
             # Create saver and save data
-            saver = EelsEmdSaver(compression='gzip', compression_level=6)
+            saver = EelsEmdSaver(compression='zstd')
 
             # Determine original MIB path
             original_mib_path = ""
@@ -6381,9 +6607,10 @@ Bright Field Disk Detection Results:
                     f"EELS data saved successfully!\n\n"
                     f"File: {os.path.basename(filename)}\n"
                     f"Size: {actual_size_mb:.1f} MB\n"
-                    f"Format: EMD 1.0 (compatible with py4DSTEM)"
+                    f"Format: EMD 1.0 (compatible with py4DSTEM)\n"
+                    f"Compression: high-compression zstd"
                 )
-                self.log_message(f"EELS data saved as EMD: {filename} ({actual_size_mb:.1f} MB)", "SUCCESS")
+                self.log_message(f"EELS data saved as EMD (zstd): {filename} ({actual_size_mb:.1f} MB)", "SUCCESS")
 
                 # Clear unsaved progressive data flag since we've successfully saved
                 self.has_unsaved_progressive_data = False
@@ -6398,6 +6625,97 @@ Bright Field Disk Detection Results:
             QMessageBox.critical(self, "Save Error", error_msg)
             self.log_message(f"Error saving EELS as EMD: {str(e)}", "ERROR")
 
+    def export_mib_to_numpy_json(self):
+        """Export the currently loaded source MIB file to NumPy and JSON."""
+        source_path = self._get_current_mib_source_path()
+        if not source_path:
+            QMessageBox.warning(
+                self,
+                "No MIB Source",
+                "Load a MIB file first. This export only applies to source MIB data."
+            )
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export MIB as NumPy/JSON",
+            os.path.splitext(source_path)[0] + ".npy",
+            "NumPy files (*.npy);;All files (*.*)"
+        )
+
+        if not filename:
+            return
+
+        output_base = os.path.splitext(filename)[0]
+        progress_dialog = None
+
+        try:
+            from ..io.mib_numpy_exporter import export_mib_to_numpy_json
+
+            progress_dialog = QProgressDialog("Exporting MIB to NumPy/JSON...", "Cancel", 0, 100, self)
+            progress_dialog.setWindowModality(Qt.WindowModal)
+            progress_dialog.setWindowTitle("Export MIB")
+            progress_dialog.setValue(0)
+            progress_dialog.show()
+            QApplication.processEvents()
+
+            def progress_callback(percent, message):
+                progress_dialog.setValue(percent)
+                progress_dialog.setLabelText(message)
+                QApplication.processEvents()
+                if progress_dialog.wasCanceled():
+                    raise InterruptedError("Export operation cancelled by user")
+
+            file_info = get_data_file_info(source_path)
+            processing_options = {
+                'sum_y': file_info.get('experiment_type') == 'EELS',
+                'bin_factor': 1,
+                'bin_method': 'mean',
+            }
+
+            metadata = export_mib_to_numpy_json(
+                source_path,
+                output_base=output_base,
+                force=True,
+                progress_every=256,
+                progress_callback=progress_callback,
+                processing_options=processing_options,
+            )
+
+            progress_dialog.setValue(100)
+            progress_dialog.close()
+
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"MIB exported successfully.\n\n"
+                f"NumPy: {metadata['output_npy']}\n"
+                f"JSON: {metadata['output_json']}\n"
+                f"Shape: {metadata['array_shape']}"
+            )
+            self.log_message(f"Exported MIB to NumPy/JSON: {metadata['output_npy']}", "SUCCESS")
+
+        except InterruptedError:
+            if progress_dialog is not None:
+                progress_dialog.close()
+            QMessageBox.information(self, "Export Cancelled", "Export operation was cancelled.")
+        except Exception as e:
+            if progress_dialog is not None:
+                progress_dialog.close()
+            error_msg = f"Error exporting MIB to NumPy/JSON:\n{str(e)}"
+            QMessageBox.critical(self, "Export Error", error_msg)
+            self.log_message(f"Error exporting MIB to NumPy/JSON: {str(e)}", "ERROR")
+
+    def _get_current_mib_source_path(self):
+        """Return the current source MIB path if one is loaded."""
+        if self.current_input_file_path and self.current_input_file_path.lower().endswith('.mib'):
+            return self.current_input_file_path
+        if hasattr(self, 'progressive_loader') and self.progressive_loader:
+            file_path = getattr(self.progressive_loader, 'file_path', '')
+            if file_path and file_path.lower().endswith('.mib'):
+                return file_path
+        return None
+
     def _update_save_menu_states(self):
         """Update save menu options based on available data"""
         # Enable/disable EELS save option
@@ -6405,8 +6723,15 @@ Bright Field Disk Detection Results:
         if hasattr(self, 'save_eels_action'):
             self.save_eels_action.setEnabled(eels_available)
 
+        mib_export_available = self._get_current_mib_source_path() is not None
+        if hasattr(self, 'export_mib_action'):
+            self.export_mib_action.setEnabled(mib_export_available)
+
         # Log current data availability for debugging
-        self.log_message(f"Save menu updated - EELS available: {eels_available}")
+        self.log_message(
+            f"Save menu updated - EELS available: {eels_available}, "
+            f"MIB export available: {mib_export_available}"
+        )
 
     def _check_4dstem_memory_requirements(self, filename: str) -> bool:
         """
@@ -6500,7 +6825,7 @@ Bright Field Disk Detection Results:
 <b>Available memory:</b> {available_gb:.1f} GB
 
 <b>Recommended solution:</b>
-Convert to EMD format with {optimal_bin_factor}×{optimal_bin_factor} binning:
+Convert with {optimal_bin_factor}×{optimal_bin_factor} binning:
 • New detector size: {new_dy}×{new_dx}
 • Memory requirement: {new_memory_gb:.1f} GB
 • File size reduction: {reduction_factor:.1f}×
@@ -6520,11 +6845,17 @@ This will reduce noise and enable all 4D STEM features including virtual detecto
 
         if dialog.clickedButton() == convert_btn:
             # Open converter tab with suggested binning
-            self.tab_widget.setCurrentIndex(2)  # Converter tab
+            converter_index = self.tab_widget.indexOf(self.conversion_tab)
+            if converter_index >= 0:
+                self.tab_widget.setCurrentIndex(converter_index)
 
             # Set up converter with recommended settings
-            if hasattr(self, 'input_path_edit'):
-                self.input_path_edit.setText(filename)
+            if hasattr(self, 'input_file_path'):
+                self.input_file_path.setText(filename)
+                self.current_input_file_path = filename
+            if hasattr(self, 'output_format_combo'):
+                self.output_format_combo.setCurrentText("EMD 1.0")
+                self.update_conversion_mode()
             if hasattr(self, 'bin_factor_combo'):
                 bin_text = f"{optimal_bin_factor}x{optimal_bin_factor}"
                 index = self.bin_factor_combo.findText(bin_text)

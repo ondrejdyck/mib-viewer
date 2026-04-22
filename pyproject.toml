@@ -1,6 +1,6 @@
 [project]
 name = "mib-viewer"
-version = "1.1.0"
+version = "1.1.2"
 description = "MIB EELS Viewer - Interactive GUI for viewing MIB EELS data and ndata images"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=1.24.0",
     "pyqt5>=5.15.11,!=5.15.17",  # Exclude 5.15.17 due to missing Windows wheels for pyqt5-qt5
     "h5py>=3.0.0",
+    "hdf5plugin>=6.0.0",
     "emdfile>=0.0.16",
     "tqdm>=4.60.0",
     "py4dstem>=0.14.16",

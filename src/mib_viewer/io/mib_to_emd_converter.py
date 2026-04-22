@@ -27,12 +27,14 @@ import psutil
 try:
     # Try relative import (when run as module)
     from .mib_loader import load_mib, load_emd, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
+    from .compression_presets import build_hdf5_compression_kwargs, normalize_compression_preset
 except ImportError:
     # Fall back for direct execution
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from io.mib_loader import load_mib, load_emd, get_mib_properties, auto_detect_scan_size, MibProperties, apply_data_processing
+    from io.compression_presets import build_hdf5_compression_kwargs, normalize_compression_preset
 
 class MibToEmdConverter:
     """
@@ -40,16 +42,17 @@ class MibToEmdConverter:
     Supports both MIB → EMD conversion and EMD → EMD processing (binning, Y-summing)
     """
     
-    def __init__(self, compression='gzip', compression_level=6, chunk_size=None, log_callback=None, progress_callback=None):
+    def __init__(self, compression='zstd', compression_level=None, chunk_size=None, log_callback=None, progress_callback=None):
         """
         Initialize converter with compression settings
         
         Parameters:
         -----------
         compression : str
-            Compression algorithm ('gzip', 'szip', 'lzf', or None)
+            Compression preset ('zstd', 'lz4', or None). Legacy names are
+            normalized to these presets when possible.
         compression_level : int
-            Compression level (1-9 for gzip, ignored for others)
+            Retained for backward compatibility; ignored for zstd/lz4 presets.
         chunk_size : tuple or None
             HDF5 chunk size (sy, sx, qy, qx). If None, auto-determined.
         log_callback : callable or None
@@ -57,8 +60,8 @@ class MibToEmdConverter:
         progress_callback : callable or None
             Function to call for progress updates. Should accept (progress_percent, status_message) parameters.
         """
-        self.compression = compression
-        self.compression_level = compression_level if compression == 'gzip' else None
+        self.compression = normalize_compression_preset(compression)
+        self.compression_level = compression_level if compression_level is not None else None
         self.chunk_size = chunk_size
         self.log_callback = log_callback
         self.progress_callback = progress_callback
@@ -84,6 +87,10 @@ class MibToEmdConverter:
             except Exception:
                 # Don't let progress callback errors break the conversion
                 pass
+
+    def _build_compression_kwargs(self) -> Dict[str, Any]:
+        """Build h5py compression kwargs for the configured preset."""
+        return build_hdf5_compression_kwargs(self.compression)
     
     def should_use_chunked_mode(self, file_path: str, data_shape: Optional[Tuple] = None, safety_factor: float = 0.5) -> bool:
         """
@@ -400,6 +407,7 @@ class MibToEmdConverter:
             header_bytes = f.read(384)
         header_fields = header_bytes.decode().split(',')
         props = get_mib_properties(header_fields)
+        detector_width, detector_height = props.merlin_size
         
         # Calculate merlin frame structure
         merlin_frame_dtype = np.dtype([
@@ -443,6 +451,18 @@ class MibToEmdConverter:
                             if len(frame_bytes) == merlin_frame_dtype.itemsize:
                                 frame = np.frombuffer(frame_bytes, dtype=merlin_frame_dtype)[0]
                                 frame_data = np.array(frame['data']).reshape(props.merlin_size)
+
+                                # Match load_mib() orientation for rectangular EELS detectors.
+                                # The raw MIB frame is stored in header order, but the
+                                # viewer/export path expects the EELS detector axes to be
+                                # swapped so the longer energy axis is handled consistently.
+                                if (
+                                    detector_width != detector_height
+                                    and detector_width > detector_height
+                                    and frame_data.shape == (detector_width, detector_height)
+                                ):
+                                    frame_data = frame_data.reshape(detector_height, detector_width)
+
                                 chunk_data[chunk_y, chunk_x] = frame_data
                 
                 yield chunk_slice, chunk_data
@@ -602,11 +622,7 @@ class MibToEmdConverter:
         # Create output EMD file structure first
         hdf5_chunks = self.determine_optimal_chunks(metadata['shape_4d'])
         
-        compression_kwargs = {}
-        if self.compression:
-            compression_kwargs['compression'] = self.compression
-            if self.compression_level is not None:
-                compression_kwargs['compression_opts'] = self.compression_level
+        compression_kwargs = self._build_compression_kwargs()
         
         self.update_progress(20, "Creating output file structure...")
         
@@ -726,7 +742,7 @@ class MibToEmdConverter:
         log_group.attrs['conversion_date'] = time.strftime('%Y-%m-%d %H:%M:%S')
         log_group.attrs['converter_version'] = '1.0'
         log_group.attrs['compression_algorithm'] = self.compression or 'none'
-        if self.compression_level:
+        if self.compression_level is not None:
             log_group.attrs['compression_level'] = self.compression_level
     
     def _calculate_conversion_stats(self, input_path: str, output_path: str, load_time: float, write_time: float) -> Dict[str, Any]:
@@ -788,15 +804,11 @@ class MibToEmdConverter:
         chunks = self.determine_optimal_chunks(metadata['shape_4d'])
         
         # Create EMD file
-        self.log(f"\nCreating EMD file with {self.compression} compression...")
+        self.log(f"\nCreating EMD file with {self.compression} compression preset...")
         start_time = time.time()
         
         # Prepare compression kwargs
-        compression_kwargs = {}
-        if self.compression:
-            compression_kwargs['compression'] = self.compression
-            if self.compression_level is not None:
-                compression_kwargs['compression_opts'] = self.compression_level
+        compression_kwargs = self._build_compression_kwargs()
         
         with h5py.File(output_path, 'w') as f:
             # Create EMD 1.0 root structure
@@ -896,7 +908,7 @@ class MibToEmdConverter:
             log_group.attrs['conversion_date'] = time.strftime('%Y-%m-%d %H:%M:%S')
             log_group.attrs['converter_version'] = '1.0'
             log_group.attrs['compression_algorithm'] = self.compression or 'none'
-            if self.compression_level:
+            if self.compression_level is not None:
                 log_group.attrs['compression_level'] = self.compression_level
         
         write_time = time.time() - start_time
@@ -941,10 +953,19 @@ def main():
                        help='Binning method (default: mean)')
     parser.add_argument('--sum-y', action='store_true',
                        help='Sum in Y direction for EELS processing')
-    parser.add_argument('--compression', choices=['gzip', 'szip', 'lzf', 'none'], 
-                       default='gzip', help='Compression algorithm (default: gzip)')
-    parser.add_argument('--compression-level', type=int, choices=range(1, 10),
-                       default=6, help='Compression level for gzip (1-9, default: 6)')
+    parser.add_argument(
+        '--compression',
+        choices=['zstd', 'lz4', 'none'],
+        default='zstd',
+        help='Compression preset: zstd = highest compression, lz4 = fastest I/O'
+    )
+    parser.add_argument(
+        '--compression-level',
+        type=int,
+        choices=range(1, 10),
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument('--chunks', nargs=4, type=int, metavar=('SY', 'SX', 'QY', 'QX'),
                        help='Custom chunk size (default: auto-determined)')
     parser.add_argument('--force', action='store_true',
@@ -977,7 +998,7 @@ def main():
     # Setup converter
     compression = args.compression if args.compression != 'none' else None
     chunk_size = tuple(args.chunks) if args.chunks else None
-    
+
     converter = MibToEmdConverter(
         compression=compression,
         compression_level=args.compression_level,

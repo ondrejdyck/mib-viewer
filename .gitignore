@@ -75,6 +75,10 @@ debug_*.emd
 Example*4D/
 Example*EELS*/
 
+# MIB exporter directory
+mib_exporter/
+mib_exporter.zip
+
 # Development notes (private, not for repo)
 NOTES.md
 LARGE_FILE_LAZY_LOADING_PLAN.md

@@ -2,47 +2,51 @@
 
 This file is the **single source of truth** for project-specific agent instructions.
 
-## Read-first artifacts (always)
+## Read-first artifacts
 
-1. `README.md` – user + developer overview
-2. `docs/ai/repo-map.md` – auto-generated repo map (entrypoints/modules)
-3. `docs/ai/notes/INDEX.md` – curated, AI-generated session/port notes (auto-indexed)
-4. `CHANGELOG.md` – release history
-5. `tests/README.md` – testing organization
+Read these first when orienting on a non-trivial task:
 
-## AI navigation artifacts (keep current)
+1. `README.md` - user + developer overview
+2. `docs/ai/mib-notes.md` - current understanding, decisions, and open questions
+3. `docs/ai/repo-map.md` - auto-generated repo map
+4. `docs/ai/notes/INDEX.md` - curated AI note index with freshness flags
+5. `docs/ai/dev-scripts.md` - current vs attic script inventory
+6. `CHANGELOG.md` - release history
+7. `tests/README.md` - testing organization
 
-This repo maintains two lightweight, auto-generated AI navigation artifacts:
+## AI navigation artifacts
 
+This repo keeps the same lightweight scaffold used in the adjacent RAG project:
+
+- `docs/ai/mib-notes.md`
 - `docs/ai/repo-map.md`
 - `docs/ai/symbol-index.json`
+- `docs/ai/dev-scripts.md`
+- `docs/ai/notes/`
 
-Regenerate them after structural changes:
+Regenerate the navigation artifacts after structural changes:
 
 ```bash
 uv run python scripts/gen_ai_index.py --include-tests
+uv run python scripts/ai_notes_hygiene.py
 ```
 
-## AI notes (keep relevant)
+## AI notes
 
 High-signal notes live in `docs/ai/notes/` and include frontmatter with:
 
 - `base_commit`: the git commit the note was generated against
 - `scope_paths`: files/dirs the note claims to describe
-- `stale_policy.max_commits_since_base`: default 30 (for this repo)
-
-Update the notes index and staleness flags with:
-
-```bash
-uv run python scripts/ai_notes_hygiene.py
-```
+- `stale_policy.max_commits_since_base`: default 30 for this repo
 
 Policy:
-- Do not delete notes automatically.
-- Prefer marking notes as *stale* when their scope has changed since `base_commit`.
 
-## Coding rules
+- Do not delete notes automatically.
+- Prefer marking notes as stale when their scope has changed since `base_commit`.
+
+## Code and docs hygiene
 
 - Keep changes minimal and consistent with existing patterns.
 - Do not commit large data or generated binaries.
 - Avoid editing CI/workflows unless explicitly requested.
+- Keep `docs/ai/mib-notes.md` short and decision-oriented.

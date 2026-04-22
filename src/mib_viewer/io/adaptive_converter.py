@@ -35,6 +35,7 @@ from .progress_reporting import (
 # Import existing conversion functionality
 from .mib_to_emd_converter import MibToEmdConverter
 from .mib_loader import get_mib_properties, apply_data_processing
+from .compression_presets import build_hdf5_compression_kwargs, normalize_compression_preset
 
 
 class AdaptiveMibEmdConverter:
@@ -49,8 +50,8 @@ class AdaptiveMibEmdConverter:
     """
     
     def __init__(self,
-                 compression: str = 'gzip',
-                 compression_level: int = 6,
+                 compression: str = 'zstd',
+                 compression_level: int | None = None,
                  chunk_size: Optional[Tuple[int, int, int, int]] = None,
                  max_workers: Optional[int] = None,
                  conservative_mode: bool = True,
@@ -63,9 +64,9 @@ class AdaptiveMibEmdConverter:
         Parameters:
         -----------
         compression : str
-            HDF5 compression algorithm ('gzip', 'lzf', 'szip', None)
-        compression_level : int  
-            Compression level (1-9 for gzip)
+            Compression preset ('zstd', 'lz4', or None)
+        compression_level : int, optional
+            Retained for compatibility; ignored for zstd/lz4
         chunk_size : tuple, optional
             Fixed chunk size (overrides adaptive calculation)
         max_workers : int, optional
@@ -79,7 +80,7 @@ class AdaptiveMibEmdConverter:
         verbose : bool
             Enable detailed logging
         """
-        self.compression = compression
+        self.compression = normalize_compression_preset(compression)
         self.compression_level = compression_level
         self.fixed_chunk_size = chunk_size
         # CRITICAL: Force single-threaded to prevent HDF5 segfaults
@@ -492,11 +493,7 @@ class AdaptiveMibEmdConverter:
                 self.log(f"Using uint16 dtype (no binning)")
 
             # Create main dataset with adaptive chunking
-            compression_opts = {}
-            if self.compression:
-                compression_opts['compression'] = self.compression
-                if self.compression == 'gzip':
-                    compression_opts['compression_opts'] = self.compression_level
+            compression_opts = build_hdf5_compression_kwargs(self.compression)
 
             dataset = datacube_group.create_dataset(
                 'data',
@@ -861,8 +858,8 @@ class AdaptiveMibEmdConverter:
 # Convenience function for backward compatibility
 def convert_mib_to_emd_adaptive(input_path: str,
                               output_path: str,
-                              compression: str = 'gzip',
-                              compression_level: int = 6,
+                              compression: str = 'zstd',
+                              compression_level: int | None = None,
                               max_workers: Optional[int] = None,
                               processing_options: Optional[Dict] = None,
                               progress_callback: Optional[Callable] = None,
@@ -881,9 +878,9 @@ def convert_mib_to_emd_adaptive(input_path: str,
     output_path : str  
         Path to output EMD file
     compression : str
-        HDF5 compression ('gzip', 'lzf', 'szip', None)
+        Compression preset ('zstd', 'lz4', or None)
     compression_level : int
-        Compression level for gzip (1-9)
+        Retained for compatibility; ignored for zstd/lz4
     max_workers : int, optional
         Maximum worker threads (None = auto-determine)
     processing_options : dict, optional

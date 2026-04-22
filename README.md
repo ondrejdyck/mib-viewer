@@ -48,6 +48,12 @@
 - **Interactive spatial frequency analysis** with ROI/point selectors
 - **Amplitude and phase visualization** with specialized colormaps
 
+### **Export**
+- **Official MIB export** to NumPy `.npy` plus JSON metadata
+- **Standalone exporter support** for scripting and reproducible data handoff
+- **EMD conversion presets** for high compression (`zstd`) or faster I/O (`lz4`)
+- **Viewer-aligned EELS orientation handling** including energy-axis reversal
+
 ### **Technical Capabilities**
 - **Standalone**: No Python installation required (~80-120 MB)
 - **Performance**: Hardware-accelerated OpenGL rendering
@@ -76,7 +82,8 @@
 
 - **Primary**: `.mib` files (4D EELS/STEM datasets)
 - **Contextual**: `.ndata1` files (2D reference images)
-- **Future**: EMD compressed format support
+- **Export**: NumPy `.npy` plus JSON metadata for MIB datasets
+- **Export**: EMD 1.0 files with `zstd` or `lz4` compression presets
 
 ---
 

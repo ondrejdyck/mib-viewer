@@ -43,9 +43,8 @@ def test_converter():
         
         # Test different compression settings
         test_configs = [
-            ("gzip_6", {"compression": "gzip", "compression_level": 6}),
-            ("gzip_1", {"compression": "gzip", "compression_level": 1}),  
-            ("szip", {"compression": "szip"}),
+            ("zstd", {"compression": "zstd"}),
+            ("lz4", {"compression": "lz4"}),
             ("no_compression", {"compression": None}),
         ]
         

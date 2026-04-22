@@ -16,10 +16,12 @@ from pathlib import Path
 # Import MIB properties for metadata extraction
 try:
     from .mib_loader import get_mib_properties
+    from .compression_presets import build_hdf5_compression_kwargs, normalize_compression_preset
 except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from io.mib_loader import get_mib_properties
+    from io.compression_presets import build_hdf5_compression_kwargs, normalize_compression_preset
 
 
 class EelsEmdSaver:
@@ -31,18 +33,19 @@ class EelsEmdSaver:
     - Output: EMD 1.0 HDF5 file compatible with py4DSTEM/STEMTooL
     """
 
-    def __init__(self, compression='gzip', compression_level=6):
+    def __init__(self, compression='zstd', compression_level=None):
         """
-        Initialize saver with compression settings
+        Initialize saver with a compression preset.
 
         Parameters:
         -----------
         compression : str
-            Compression algorithm ('gzip', 'szip', 'lzf', or None)
-        compression_level : int
-            Compression level (1-9 for gzip)
+            Compression preset ('zstd', 'lz4', or None). Legacy names are
+            normalized to these presets when possible.
+        compression_level : int, optional
+            Retained for backward compatibility; ignored for zstd/lz4.
         """
-        self.compression = compression
+        self.compression = normalize_compression_preset(compression)
         self.compression_level = compression_level
 
     def save_eels_data(self, eels_data: np.ndarray, original_mib_path: str,
@@ -145,12 +148,8 @@ class EelsEmdSaver:
         """Create EMD 1.0 file with EELS data"""
         sy, sx, detector_y, energy_channels = eels_data.shape
 
-        # Setup compression options
-        compression_opts = {}
-        if self.compression:
-            compression_opts['compression'] = self.compression
-            if self.compression == 'gzip':
-                compression_opts['compression_opts'] = self.compression_level
+        # Setup compression options using the shared preset helper.
+        compression_opts = build_hdf5_compression_kwargs(self.compression)
 
         with h5py.File(output_path, 'w') as f:
             if progress_callback:
@@ -255,8 +254,14 @@ class EelsEmdSaver:
     def get_estimated_file_size(self, eels_data: np.ndarray) -> float:
         """Estimate output file size in MB"""
         uncompressed_size = eels_data.nbytes
-        # Rough compression estimate (gzip typically achieves 3-5x on EELS data)
-        compression_factor = 4.0 if self.compression == 'gzip' else 1.0
+        # Rough compression estimate. zstd is the max-compression preset;
+        # lz4 is much faster but sacrifices roughly 40% of that ratio.
+        if self.compression == 'zstd':
+            compression_factor = 4.0
+        elif self.compression == 'lz4':
+            compression_factor = 2.4
+        else:
+            compression_factor = 1.0
 
         # Add overhead for metadata (~10MB)
         overhead = 10 * 1024 * 1024
